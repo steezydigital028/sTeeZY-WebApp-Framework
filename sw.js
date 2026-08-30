@@ -1,6 +1,5 @@
 // File: sw.js
-const CACHE_NAME = 'ara-hris-pwa-v2';
-
+const CACHE_NAME = 'ara-beauty-pwa-v1';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -19,41 +18,28 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS);
-    }).then(() => {
-      return self.skipWaiting();
-    })
+    }).then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
+    caches.keys().then((keys) => {
       return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            return caches.delete(cache);
-          }
-        })
+        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
       );
-    }).then(() => {
-      return self.clients.claim();
-    })
+    }).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
-  const requestUrl = new URL(event.request.url);
+  if (event.request.method !== 'GET') return;
 
-  // Bypass API Supabase, mutasi POST/PUT/DELETE, dan Google Maps Geolocation
-  if (
-    event.request.method !== 'GET' ||
-    requestUrl.origin.includes('supabase.co') ||
-    requestUrl.origin.includes('google.com')
-  ) {
+  // Jangan cache permintaan API langsung ke Supabase
+  if (event.request.url.includes('supabase.co')) {
     return;
   }
 
-  // Strategi Cache First: Cek Cache -> Jika tidak ada ambil dari Network -> Simpan ke Cache
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
@@ -61,11 +47,7 @@ self.addEventListener('fetch', (event) => {
       }
 
       return fetch(event.request).then((networkResponse) => {
-        if (
-          !networkResponse ||
-          networkResponse.status !== 200 ||
-          (networkResponse.type !== 'basic' && networkResponse.type !== 'cors')
-        ) {
+        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
           return networkResponse;
         }
 
@@ -76,7 +58,6 @@ self.addEventListener('fetch', (event) => {
 
         return networkResponse;
       }).catch(() => {
-        // Fallback offline untuk rute navigasi halaman
         if (event.request.headers.get('accept')?.includes('text/html')) {
           return caches.match('/index.html');
         }

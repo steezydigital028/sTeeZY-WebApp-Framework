@@ -6,6 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Ara Beauty - HRIS & Executive Dashboard</title>
   
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ff8fa3">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Ara Beauty">
+  <link rel="apple-touch-icon" href="https://placehold.co/192x192/ff8fa3/ffffff?text=Ara+Beauty">
+
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -13,15 +20,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   
-  <!-- PWA & MOBILE APP META TAGS -->
-  <link rel="manifest" href="/manifest.json">
-  <meta name="theme-color" content="#ff8fa3">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Ara HRIS">
-  <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
-
   <!-- SUPABASE JS CLIENT SDK -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
@@ -272,10 +270,19 @@
 
   <!-- ==================== SECTION: OWNER VIEW ==================== -->
   <div id="app-owner" class="hidden absolute inset-0 z-30 flex">
-    <aside class="w-64 bg-white shadow-xl z-20 hidden md:flex flex-col">
-      <div class="p-6 border-b border-gray-100 flex items-center gap-3">
-        <div class="w-10 h-10 rounded-full bg-brandPink flex items-center justify-center text-white font-bold shadow-md"><i class="fa-solid fa-spa"></i></div>
-        <div><h1 class="text-lg font-bold text-brandText tracking-tight">Ara Beauty</h1><p class="text-xs text-gray-500">Owner Dashboard</p></div>
+    <!-- Backdrop Overlay untuk Mobile Drawer -->
+    <div id="sidebarBackdrop" onclick="toggleSidebar(false)" class="fixed inset-0 bg-brandText/40 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
+
+    <!-- Sidebar Responsive (Drawer on Mobile, Static on Desktop) -->
+    <aside id="ownerSidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-2xl flex flex-col transform -translate-x-full md:translate-x-0 md:static md:shadow-xl md:z-20 transition-transform duration-300 ease-in-out">
+      <div class="p-6 border-b border-gray-100 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-full bg-brandPink flex items-center justify-center text-white font-bold shadow-md"><i class="fa-solid fa-spa"></i></div>
+          <div><h1 class="text-lg font-bold text-brandText tracking-tight">Ara Beauty</h1><p class="text-xs text-gray-500">Owner Dashboard</p></div>
+        </div>
+        <button onclick="toggleSidebar(false)" class="md:hidden text-gray-400 hover:text-red-500 p-1 rounded-lg transition-colors">
+          <i class="fa-solid fa-xmark text-xl"></i>
+        </button>
       </div>
       <nav class="flex-1 p-4 space-y-1 overflow-y-auto" id="navMenu"></nav>
       <div class="p-4 border-t border-gray-100 text-center">
@@ -284,9 +291,14 @@
     </aside>
 
     <main class="flex-1 flex flex-col h-screen overflow-hidden">
-      <header class="bg-white/80 backdrop-blur-md shadow-sm z-10 px-6 py-4 flex justify-between items-center md:hidden">
-        <div class="flex items-center gap-2 font-bold text-brandPink"><i class="fa-solid fa-spa"></i> Ara Beauty</div>
-        <div class="flex items-center gap-3"><button onclick="logout()" class="text-red-400"><i class="fa-solid fa-power-off"></i></button></div>
+      <header class="bg-white/80 backdrop-blur-md shadow-sm z-10 px-4 py-3.5 flex justify-between items-center md:hidden">
+        <div class="flex items-center gap-3">
+          <button id="btnHamburger" onclick="toggleSidebar(true)" class="w-10 h-10 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center text-brandText hover:bg-brandPink/10 hover:text-brandPink active:scale-95 transition-all shadow-sm" title="Buka Menu">
+            <i class="fa-solid fa-bars text-lg"></i>
+          </button>
+          <div class="flex items-center gap-2 font-black text-brandPink text-base"><i class="fa-solid fa-spa"></i> Ara Beauty</div>
+        </div>
+        <div class="flex items-center gap-3"><button onclick="logout()" class="w-10 h-10 rounded-2xl bg-red-50 flex items-center justify-center text-red-400 hover:bg-red-100 transition-colors shadow-sm"><i class="fa-solid fa-power-off"></i></button></div>
       </header>
 
       <div class="flex-1 overflow-y-auto p-4 md:p-8" id="mainContent">
@@ -761,17 +773,12 @@
   <!-- INTEGRASI LOGIKA JAVASCRIPT INDEPENDEN (SUPABASE & VERCEL) -->
   <script src="script.js"></script>
 
-  <!-- PWA SERVICE WORKER REGISTRATION -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
-          .then((registration) => {
-            console.log('✅ Service Worker PWA aktif pada scope:', registration.scope);
-          })
-          .catch((error) => {
-            console.error('❌ Gagal mendaftarkan Service Worker:', error);
-          });
+          .then((reg) => console.log('PWA ServiceWorker terdaftar:', reg.scope))
+          .catch((err) => console.warn('PWA ServiceWorker gagal didaftarkan:', err));
       });
     }
   </script>

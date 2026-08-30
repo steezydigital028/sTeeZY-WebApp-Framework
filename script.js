@@ -3,8 +3,8 @@
 const SUPABASE_URL = 'https://hbqsyfnommdzwwbgsqgx.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_PljrNIdoeriyWPcJHdkmfg_Z5mh5T-F';
 
-// Inisialisasi Klien Supabase
-const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+// Inisialisasi Klien Supabase menggunakan penamaan unik untuk mencegah collision dengan window.supabase
+const supabaseClient = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const state = {
   view: 'dashboard',
@@ -58,6 +58,18 @@ function generateSeqID(prefix, existingList) {
   return `${prefix}-${String(maxNum + 1).padStart(4, '0')}`;
 }
 
+function checkSupabaseConfig() {
+  if (!supabaseClient || SUPABASE_URL.includes('YOUR_SUPABASE_PROJECT_ID')) {
+    Swal.fire({
+      icon: 'warning',
+      title: 'Konfigurasi Supabase Belum Lengkap',
+      text: 'Silakan isi variabel SUPABASE_URL dan SUPABASE_ANON_KEY di baris teratas file script.js Anda.'
+    });
+    return false;
+  }
+  return true;
+}
+
 function init() {
   const savedAuth = localStorage.getItem('ara_auth');
   if (savedAuth) {
@@ -75,6 +87,8 @@ async function handleLogin(e) {
   const pin = document.getElementById('loginPin').value.trim();
   if (!pin) return;
 
+  if (!checkSupabaseConfig()) return;
+
   Swal.fire({ 
     title: 'Memverifikasi PIN...', 
     text: 'Menghubungkan ke database Supabase...',
@@ -83,8 +97,7 @@ async function handleLogin(e) {
   });
 
   try {
-    // 1. Ambil pengaturan untuk PIN Owner
-    const { data: settingsData, error: setErr } = await supabase
+    const { data: settingsData, error: setErr } = await supabaseClient
       .from('settings')
       .select('*');
 
@@ -96,14 +109,12 @@ async function handleLogin(e) {
       if (pinSetting) ownerPin = pinSetting['Nilai'];
     }
 
-    // 2. Verifikasi jika login sebagai Owner
     if (pin === ownerPin) {
       finishLogin({ success: true, role: 'Owner', name: 'M. RIVAL AMIR' });
       return;
     }
 
-    // 3. Verifikasi jika login sebagai Karyawan aktif
-    const { data: employees, error: empErr } = await supabase
+    const { data: employees, error: empErr } = await supabaseClient
       .from('employees')
       .select('*')
       .eq('PIN', pin)
@@ -158,16 +169,17 @@ function launchApp() {
 }
 
 async function loadEmployeeData() {
+  if (!checkSupabaseConfig()) return;
   try {
     const [empRes, attRes, shfRes, reqRes, lmbRes, payRes, potRes, setRes] = await Promise.all([
-      supabase.from('employees').select('*'),
-      supabase.from('attendances').select('*'),
-      supabase.from('shifts').select('*'),
-      supabase.from('perubahan_jadwal').select('*'),
-      supabase.from('lemburs').select('*'),
-      supabase.from('payrolls').select('*'),
-      supabase.from('potongans').select('*'),
-      supabase.from('settings').select('*')
+      supabaseClient.from('employees').select('*'),
+      supabaseClient.from('attendances').select('*'),
+      supabaseClient.from('shifts').select('*'),
+      supabaseClient.from('perubahan_jadwal').select('*'),
+      supabaseClient.from('lemburs').select('*'),
+      supabaseClient.from('payrolls').select('*'),
+      supabaseClient.from('potongans').select('*'),
+      supabaseClient.from('settings').select('*')
     ]);
 
     state.data.Employee = empRes.data || [];
@@ -193,16 +205,17 @@ async function loadEmployeeData() {
 }
 
 async function loadData() {
+  if (!checkSupabaseConfig()) return;
   try {
     const [empRes, attRes, shfRes, reqRes, lmbRes, payRes, potRes, setRes] = await Promise.all([
-      supabase.from('employees').select('*'),
-      supabase.from('attendances').select('*'),
-      supabase.from('shifts').select('*'),
-      supabase.from('perubahan_jadwal').select('*'),
-      supabase.from('lemburs').select('*'),
-      supabase.from('payrolls').select('*'),
-      supabase.from('potongans').select('*'),
-      supabase.from('settings').select('*')
+      supabaseClient.from('employees').select('*'),
+      supabaseClient.from('attendances').select('*'),
+      supabaseClient.from('shifts').select('*'),
+      supabaseClient.from('perubahan_jadwal').select('*'),
+      supabaseClient.from('lemburs').select('*'),
+      supabaseClient.from('payrolls').select('*'),
+      supabaseClient.from('potongans').select('*'),
+      supabaseClient.from('settings').select('*')
     ]);
 
     state.data.Employee = empRes.data || [];
@@ -287,6 +300,8 @@ async function handleSettingsSubmit(e) {
   const formData = new FormData(e.target);
   const data = Object.fromEntries(formData.entries());
 
+  if (!checkSupabaseConfig()) return;
+
   Swal.fire({
     title: 'Menyimpan Pengaturan...',
     text: 'Menyinkronkan konfigurasi ke Supabase...',
@@ -300,7 +315,7 @@ async function handleSettingsSubmit(e) {
       'Nilai': String(data[key])
     }));
 
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from('settings')
       .upsert(updates, { onConflict: 'Kunci Pengaturan' });
 
@@ -776,20 +791,21 @@ function showShiftWarningModal(dateStr, dayName, countP, minP, countS, minS) {
 }
 
 async function updateShiftByOwner(empName, dateStr, newCode) {
+  if (!checkSupabaseConfig()) return;
   Swal.fire({ title: 'Menyimpan Jadwal...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
     const shiftText = newCode === 'P' ? 'Pagi' : (newCode === 'S' ? 'Siang' : 'Libur');
     const existing = (state.data.Shift || []).find(s => s.Tanggal === dateStr && s['Nama Karyawan'] === empName);
 
     if (existing) {
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from('shifts')
         .update({ 'Tipe Shift': shiftText })
         .eq('ID', existing.ID);
       if (error) throw error;
     } else {
       const newId = generateSeqID('SHF', state.data.Shift);
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from('shifts')
         .insert([{
           'ID': newId,
@@ -879,10 +895,11 @@ function renderPengajuanOwner() {
 }
 
 async function processReq(id, action) {
+  if (!checkSupabaseConfig()) return;
   Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
     let newStatus = action === 'ACC' ? 'Disetujui' : 'Ditolak';
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from('perubahan_jadwal')
       .update({ 'Status': newStatus })
       .eq('ID', id);
@@ -948,10 +965,11 @@ function renderLemburOwner() {
 }
 
 async function processLemburReq(id, action) {
+  if (!checkSupabaseConfig()) return;
   Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
     let newStatus = action === 'ACC' ? 'Disetujui' : 'Ditolak';
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from('lemburs')
       .update({ 'Status': newStatus })
       .eq('ID', id);
@@ -1300,6 +1318,7 @@ async function handlePengajuanJadwal(e) {
   let alasan = document.getElementById('formReqAlasan').value;
 
   if (!tgl1 || !alasan) return;
+  if (!checkSupabaseConfig()) return;
 
   Swal.fire({ title: 'Mengajukan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
@@ -1318,7 +1337,7 @@ async function handlePengajuanJadwal(e) {
         'Status': 'Pending'
       };
 
-      const { error } = await supabase.from('lemburs').insert([payload]);
+      const { error } = await supabaseClient.from('lemburs').insert([payload]);
       if (error) throw error;
 
       Swal.fire('Sukses', 'Pengajuan lembur berhasil dikirim.', 'success');
@@ -1356,7 +1375,7 @@ async function handlePengajuanJadwal(e) {
       'Status': 'Pending'
     };
 
-    const { error } = await supabase.from('perubahan_jadwal').insert([payload]);
+    const { error } = await supabaseClient.from('perubahan_jadwal').insert([payload]);
     if (error) throw error;
 
     Swal.fire('Sukses', 'Pengajuan perubahan jadwal berhasil dikirim.', 'success');
@@ -1558,6 +1577,7 @@ async function handlePotonganSubmit(e) {
   e.preventDefault();
   let tgl = document.getElementById('potTanggal').value;
   if (!tgl) return;
+  if (!checkSupabaseConfig()) return;
 
   const newId = generateSeqID('POT', state.data.Potongan);
   const payload = {
@@ -1571,7 +1591,7 @@ async function handlePotonganSubmit(e) {
 
   Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
-    const { error } = await supabase.from('potongans').insert([payload]);
+    const { error } = await supabaseClient.from('potongans').insert([payload]);
     if (error) throw error;
     Swal.fire('Sukses', 'Potongan kasir/kasbon berhasil disimpan.', 'success');
     closeModal('modal-potongan');
@@ -1586,20 +1606,22 @@ async function handleFormSubmit(e, sheetName) {
   const formData = new FormData(e.target);
   const data = Object.fromEntries(formData.entries());
 
+  if (!checkSupabaseConfig()) return;
+
   if (sheetName === 'Attendance') {
     if (data.Tanggal) data.Tanggal = formatDateToDDMMYYYY(new Date(data.Tanggal));
     Swal.fire({ title: 'Menyimpan Absensi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
     try {
       let existing = (state.data.Attendance || []).find(a => a.Tanggal === data.Tanggal && a['Nama Karyawan'] === data['Nama Karyawan']);
       if (existing) {
-        const { error } = await supabase
+        const { error } = await supabaseClient
           .from('attendances')
           .update(data)
           .eq('ID', existing.ID);
         if (error) throw error;
       } else {
         data['ID'] = generateSeqID('ATT', state.data.Attendance);
-        const { error } = await supabase.from('attendances').insert([data]);
+        const { error } = await supabaseClient.from('attendances').insert([data]);
         if (error) throw error;
       }
       Swal.fire('Sukses', 'Absensi berhasil disimpan!', 'success');
@@ -1618,11 +1640,11 @@ async function handleFormSubmit(e, sheetName) {
     Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
     try {
       if (data.ID) {
-        const { error } = await supabase.from('employees').update(data).eq('ID', data.ID);
+        const { error } = await supabaseClient.from('employees').update(data).eq('ID', data.ID);
         if (error) throw error;
       } else {
         data.ID = generateSeqID('EMP', state.data.Employee);
-        const { error } = await supabase.from('employees').insert([data]);
+        const { error } = await supabaseClient.from('employees').insert([data]);
         if (error) throw error;
       }
       Swal.fire('Sukses', 'Data karyawan berhasil disimpan!', 'success');
@@ -1752,13 +1774,13 @@ async function uploadPhotoToSupabase(base64Data, filename) {
   const blob = new Blob([ab], { type: mimeString });
 
   const path = `${filename}.jpg`;
-  const { error } = await supabase.storage
+  const { error } = await supabaseClient.storage
     .from('absensi-photos')
     .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
 
   if (error) throw error;
 
-  const { data: publicUrlData } = supabase.storage
+  const { data: publicUrlData } = supabaseClient.storage
     .from('absensi-photos')
     .getPublicUrl(path);
 
@@ -1845,6 +1867,8 @@ function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, du
     return;
   }
 
+  if (!checkSupabaseConfig()) return;
+
   Swal.fire({
     title: `Memproses Absen ${jenisAbsen}...`,
     text: 'Mencari koordinat GPS & Mengunggah Foto ke Supabase...',
@@ -1874,7 +1898,6 @@ function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, du
           return;
         }
 
-        // Upload foto ke Supabase Storage
         const fileName = `Absen_${namaUser.replace(/\s+/g, '_')}_${Date.now()}`;
         const photoUrl = await uploadPhotoToSupabase(photoData, fileName);
 
@@ -1889,7 +1912,7 @@ function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, du
             'Foto Absensi': photoUrl,
             'Lokasi Maps': mapsUrl
           };
-          const { error } = await supabase
+          const { error } = await supabaseClient
             .from('attendances')
             .update(updatePayload)
             .eq('ID', existing.ID);
@@ -1907,7 +1930,7 @@ function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, du
             'Lokasi Maps': mapsUrl,
             'Foto Absensi': photoUrl
           };
-          const { error } = await supabase.from('attendances').insert([insertPayload]);
+          const { error } = await supabaseClient.from('attendances').insert([insertPayload]);
           if (error) throw error;
         }
 
@@ -1988,6 +2011,8 @@ async function triggerGeneratePayroll() {
   const period = document.getElementById('payrollPeriod').value;
   if (!period) { Swal.fire('Oops', 'Pilih periode (Bulan & Tahun)!', 'warning'); return; }
   const formattedPeriod = `${period.split('-')[1]}/${period.split('-')[0]}`;
+
+  if (!checkSupabaseConfig()) return;
 
   Swal.fire({
     title: 'Menghitung Payroll...',
@@ -2097,7 +2122,7 @@ async function triggerGeneratePayroll() {
       });
     });
 
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from('payrolls')
       .upsert(payrollPayloads, { onConflict: 'ID' });
 
@@ -2120,11 +2145,13 @@ async function handleChangePIN(e) {
   if (pinBaru !== pinKonf) { Swal.fire('Gagal', 'Konfirmasi PIN Baru tidak cocok!', 'warning'); return; }
   if (pinLama === pinBaru) { Swal.fire('Info', 'PIN Baru tidak boleh sama dengan PIN Lama.', 'info'); return; }
 
+  if (!checkSupabaseConfig()) return;
+
   Swal.fire({ title: 'Menyimpan PIN...', text: 'Mengenkripsi dan memperbarui akses Anda...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
   try {
     const empName = state.auth.name;
-    const { data: userRecord, error: fetchErr } = await supabase
+    const { data: userRecord, error: fetchErr } = await supabaseClient
       .from('employees')
       .select('*')
       .eq('Nama', empName)
@@ -2133,7 +2160,7 @@ async function handleChangePIN(e) {
     if (fetchErr || !userRecord) throw new Error('Akun Anda tidak ditemukan di database.');
     if (userRecord.PIN !== pinLama) throw new Error('PIN Lama yang Anda masukkan SALAH.');
 
-    const { error: updateErr } = await supabase
+    const { error: updateErr } = await supabaseClient
       .from('employees')
       .update({ 'PIN': pinBaru })
       .eq('Nama', empName);

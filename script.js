@@ -1,27 +1,38 @@
 // File: script.js
 
-const SUPABASE_URL = "https://hbqsyfnommdzwwbgsqgx.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_PljrNIdoeriyWPcJHdkmfg_Z5mh5T-F";
+const SUPABASE_URL = 'https://hbqsyfnommdzwwbgsqgx.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_PljrNIdoeriyWPcJHdkmfg_Z5mh5T-F';
 
+// Inisialisasi Klien Supabase
 const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const state = {
   view: 'dashboard',
   data: {
-    employees: [],
-    attendances: [],
-    payrolls: [],
-    shifts: [],
-    schedule_changes: [],
-    deductions: [],
-    overtimes: []
+    Employee: [],
+    Attendance: [],
+    Payroll: [],
+    Shift: [],
+    PerubahanJadwal: [],
+    Potongan: [],
+    Lembur: []
   },
   settings: {},
   auth: null
 };
 
-const shiftState = { startDate: new Date(), rangeDays: 7 };
+const shiftState = {
+  startDate: new Date(),
+  rangeDays: 7
+};
+
 let chartInstances = {};
+
+const MASTER_SHIFTS = [
+  { code: 'P', name: 'Pagi', badge: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+  { code: 'S', name: 'Siang', badge: 'bg-amber-50 text-amber-800 border-amber-200' },
+  { code: 'L', name: 'Libur', badge: 'bg-rose-50 text-rose-800 border-rose-200' }
+];
 
 const menuItems = [
   { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
@@ -35,49 +46,80 @@ const menuItems = [
   { id: 'settings', icon: 'fa-gear', label: 'Pengaturan' }
 ];
 
-async function init() {
+function generateSeqID(prefix, existingList) {
+  if (!existingList || existingList.length === 0) return `${prefix}-0001`;
+  const maxNum = existingList.reduce((max, item) => {
+    if (item.ID && item.ID.startsWith(prefix + '-')) {
+      const num = parseInt(item.ID.split('-')[1], 10);
+      return !isNaN(num) && num > max ? num : max;
+    }
+    return max;
+  }, 0);
+  return `${prefix}-${String(maxNum + 1).padStart(4, '0')}`;
+}
+
+function init() {
   const savedAuth = localStorage.getItem('ara_auth');
   if (savedAuth) {
-    state.auth = JSON.parse(savedAuth);
-    launchApp();
+    try {
+      state.auth = JSON.parse(savedAuth);
+      launchApp();
+    } catch (e) {
+      localStorage.removeItem('ara_auth');
+    }
   }
 }
 
 async function handleLogin(e) {
   e.preventDefault();
-  const pin = document.getElementById('loginPin').value;
+  const pin = document.getElementById('loginPin').value.trim();
   if (!pin) return;
 
-  Swal.fire({ title: 'Memeriksa...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  Swal.fire({ 
+    title: 'Memverifikasi PIN...', 
+    text: 'Menghubungkan ke database Supabase...',
+    allowOutsideClick: false, 
+    didOpen: () => Swal.showLoading() 
+  });
 
   try {
-    const { data: settingsData } = await supabase.from('app_settings').select('*');
-    let settingsMap = {};
-    (settingsData || []).forEach(s => { settingsMap[s.key] = s.value; });
+    // 1. Ambil pengaturan untuk PIN Owner
+    const { data: settingsData, error: setErr } = await supabase
+      .from('settings')
+      .select('*');
 
-    const ownerPin = settingsMap['PIN Owner Default'] || '888888';
+    if (setErr) throw setErr;
+
+    let ownerPin = '888888';
+    if (settingsData) {
+      const pinSetting = settingsData.find(s => s['Kunci Pengaturan'] === 'PIN Owner Default');
+      if (pinSetting) ownerPin = pinSetting['Nilai'];
+    }
+
+    // 2. Verifikasi jika login sebagai Owner
     if (pin === ownerPin) {
-      finishLogin({ success: true, role: 'Owner', name: 'Owner Ara Beauty', pin: pin });
+      finishLogin({ success: true, role: 'Owner', name: 'M. RIVAL AMIR' });
       return;
     }
 
-    const { data: employees, error } = await supabase
+    // 3. Verifikasi jika login sebagai Karyawan aktif
+    const { data: employees, error: empErr } = await supabase
       .from('employees')
       .select('*')
-      .eq('pin', pin)
-      .eq('status', 'Aktif')
-      .limit(1);
+      .eq('PIN', pin)
+      .eq('Status', 'Aktif');
 
-    if (error) throw error;
+    if (empErr) throw empErr;
 
     if (employees && employees.length > 0) {
       const user = employees[0];
-      finishLogin({ success: true, role: user.peran || 'Karyawan', name: user.nama, data: user });
+      finishLogin({ success: true, role: user.Peran || 'Karyawan', name: user.Nama, data: user });
     } else {
       Swal.fire('Ditolak', 'PIN tidak terdaftar atau akun dinonaktifkan.', 'error');
     }
   } catch (err) {
-    Swal.fire('Error Sistem', err.message || 'Gagal koneksi ke server Supabase', 'error');
+    console.error('Login error:', err);
+    Swal.fire('Gagal Login', err.message || 'Terjadi kesalahan saat memeriksa kredensial.', 'error');
   }
 }
 
@@ -107,7 +149,7 @@ function launchApp() {
     renderNav();
     document.getElementById('shiftStartDate').value = formatDateToYYYYMMDD(shiftState.startDate);
     switchView('dashboard');
-    loadAllData();
+    loadData();
   } else {
     document.getElementById('app-employee').classList.remove('hidden');
     document.getElementById('empGreetingName').innerText = state.auth.name;
@@ -115,59 +157,83 @@ function launchApp() {
   }
 }
 
-async function loadAllData() {
+async function loadEmployeeData() {
   try {
-    const [empRes, attRes, payRes, shiftRes, reqRes, lmbRes, potRes, setRes] = await Promise.all([
-      supabase.from('employees').select('*').order('created_at', { ascending: false }),
-      supabase.from('attendances').select('*').order('created_at', { ascending: false }),
-      supabase.from('payrolls').select('*').order('created_at', { ascending: false }),
+    const [empRes, attRes, shfRes, reqRes, lmbRes, payRes, potRes, setRes] = await Promise.all([
+      supabase.from('employees').select('*'),
+      supabase.from('attendances').select('*'),
       supabase.from('shifts').select('*'),
-      supabase.from('schedule_changes').select('*').order('created_at', { ascending: false }),
-      supabase.from('overtimes').select('*').order('created_at', { ascending: false }),
-      supabase.from('deductions').select('*').order('created_at', { ascending: false }),
-      supabase.from('app_settings').select('*')
+      supabase.from('perubahan_jadwal').select('*'),
+      supabase.from('lemburs').select('*'),
+      supabase.from('payrolls').select('*'),
+      supabase.from('potongans').select('*'),
+      supabase.from('settings').select('*')
     ]);
 
-    state.data.employees = empRes.data || [];
-    state.data.attendances = attRes.data || [];
-    state.data.payrolls = payRes.data || [];
-    state.data.shifts = shiftRes.data || [];
-    state.data.schedule_changes = reqRes.data || [];
-    state.data.overtimes = lmbRes.data || [];
-    state.data.deductions = potRes.data || [];
+    state.data.Employee = empRes.data || [];
+    state.data.Attendance = attRes.data || [];
+    state.data.Shift = shfRes.data || [];
+    state.data.PerubahanJadwal = reqRes.data || [];
+    state.data.Lembur = lmbRes.data || [];
+    state.data.Payroll = payRes.data || [];
+    state.data.Potongan = potRes.data || [];
 
-    let settingsObj = {};
-    (setRes.data || []).forEach(s => { settingsObj[s.key] = s.value; });
-    state.settings = settingsObj;
+    if (setRes.data) {
+      state.settings = {};
+      setRes.data.forEach(item => {
+        state.settings[item['Kunci Pengaturan']] = item['Nilai'];
+      });
+    }
 
-    populateDropdowns();
-    if (state.view === 'dashboard') renderDashboardAnalytics();
-    if (state.view === 'employee') renderEmployeeTable();
-    if (state.view === 'shift') renderShiftCalendar();
-    if (state.view === 'cuti') renderPengajuanOwner();
-    if (state.view === 'lembur') renderLemburOwner();
-    if (state.view === 'attendance') renderAttendanceTable();
-    if (state.view === 'potongan') renderPotonganTable();
-    if (state.view === 'payroll') renderPayrollTable();
-    if (state.view === 'settings') populateSettingsForm();
+    renderEmployeeDashboard();
+    renderPengajuanEmployee();
   } catch (err) {
-    console.error("Error loading Supabase data:", err);
+    console.error('Error loadEmployeeData:', err);
   }
 }
 
-async function loadEmployeeData() {
-  await loadAllData();
-  renderEmployeeDashboard();
-}
+async function loadData() {
+  try {
+    const [empRes, attRes, shfRes, reqRes, lmbRes, payRes, potRes, setRes] = await Promise.all([
+      supabase.from('employees').select('*'),
+      supabase.from('attendances').select('*'),
+      supabase.from('shifts').select('*'),
+      supabase.from('perubahan_jadwal').select('*'),
+      supabase.from('lemburs').select('*'),
+      supabase.from('payrolls').select('*'),
+      supabase.from('potongans').select('*'),
+      supabase.from('settings').select('*')
+    ]);
 
-function renderNav() {
-  const nav = document.getElementById('navMenu');
-  if (!nav) return;
-  nav.innerHTML = menuItems.map(item => `
-    <a href="#" onclick="switchView('${item.id}')" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${state.view === item.id ? 'bg-brandPink text-white shadow-md font-bold' : 'text-gray-600 hover:bg-brandPink/10 hover:text-brandPink'}">
-      <i class="fa-solid ${item.icon} w-5 text-center"></i><span class="text-sm">${item.label}</span>
-    </a>
-  `).join('');
+    state.data.Employee = empRes.data || [];
+    state.data.Attendance = attRes.data || [];
+    state.data.Shift = shfRes.data || [];
+    state.data.PerubahanJadwal = reqRes.data || [];
+    state.data.Lembur = lmbRes.data || [];
+    state.data.Payroll = payRes.data || [];
+    state.data.Potongan = potRes.data || [];
+
+    if (setRes.data) {
+      state.settings = {};
+      setRes.data.forEach(item => {
+        state.settings[item['Kunci Pengaturan']] = item['Nilai'];
+      });
+    }
+
+    if (state.view === 'dashboard') renderDashboardAnalytics();
+    if (state.view === 'employee') switchView('employee');
+    if (state.view === 'attendance') switchView('attendance');
+    if (state.view === 'payroll') switchView('payroll');
+    if (state.view === 'shift' || state.view === 'cuti') {
+      renderShiftCalendar();
+      if (state.view === 'cuti') renderPengajuanOwner();
+    }
+    if (state.view === 'lembur') renderLemburOwner();
+    if (state.view === 'potongan') switchView('potongan');
+    populateDropdowns();
+  } catch (err) {
+    console.error('Error loadData:', err);
+  }
 }
 
 function switchView(viewId) {
@@ -178,29 +244,88 @@ function switchView(viewId) {
   renderNav();
 
   if (viewId === 'dashboard') renderDashboardAnalytics();
-  if (viewId === 'employee') renderEmployeeTable();
+  if (viewId === 'employee') {
+    const empList = state.data.Employee.filter(e => e.Peran !== 'Owner');
+    renderTable('employee', ['ID', 'Nama', 'Gaji Pokok', 'Tunjangan Kehadiran', 'Utang Hari', 'Status'], empList, false, true);
+  }
   if (viewId === 'shift') renderShiftCalendar();
   if (viewId === 'cuti') renderPengajuanOwner();
   if (viewId === 'lembur') renderLemburOwner();
-  if (viewId === 'attendance') renderAttendanceTable();
-  if (viewId === 'potongan') renderPotonganTable();
-  if (viewId === 'payroll') renderPayrollTable();
-  if (viewId === 'settings') populateSettingsForm();
+  if (viewId === 'attendance') {
+    const filterAtt = state.data.Attendance.filter(a => {
+      let e = state.data.Employee.find(x => x.Nama === a['Nama Karyawan']);
+      return !e || e.Peran !== 'Owner';
+    });
+    renderTable('attendance', ['Tanggal', 'Nama Karyawan', 'Jam Masuk', 'Jam Pulang', 'Status Kehadiran', 'Sub-Status', 'Lokasi Maps', 'Foto Absensi'], filterAtt);
+  }
+  if (viewId === 'potongan') {
+    renderTable('potongan', ['Tanggal', 'Nama Karyawan', 'Jenis', 'Nominal', 'Keterangan'], state.data.Potongan, false, false);
+  }
+  if (viewId === 'payroll') {
+    renderTable('payroll', ['Periode', 'Nama Karyawan', 'Gaji Pokok', 'Tunjangan', 'Uang Lembur', 'Potongan Telat', 'Potongan Alfa', 'Potongan Lain', 'Total Gaji Bersih'], state.data.Payroll, true, false);
+  }
+  if (viewId === 'settings') {
+    populateSettingsForm();
+  }
+}
+
+function populateSettingsForm() {
+  if (!state.settings) return;
+  const f = document.getElementById('formSettings');
+  if (!f) return;
+
+  f.elements['Lat Salon'].value = state.settings['Lat Salon'] || '-8.583333';
+  f.elements['Long Salon'].value = state.settings['Long Salon'] || '115.283333';
+  f.elements['Batas Radius'].value = state.settings['Batas Radius'] || '50';
+  f.elements['Min Staff Pagi'].value = state.settings['Min Staff Pagi'] || '2';
+  f.elements['Min Staff Siang'].value = state.settings['Min Staff Siang'] || '2';
+  f.elements['PIN Owner Default'].value = state.settings['PIN Owner Default'] || '888888';
+}
+
+async function handleSettingsSubmit(e) {
+  e.preventDefault();
+  const formData = new FormData(e.target);
+  const data = Object.fromEntries(formData.entries());
+
+  Swal.fire({
+    title: 'Menyimpan Pengaturan...',
+    text: 'Menyinkronkan konfigurasi ke Supabase...',
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+
+  try {
+    const updates = Object.keys(data).map(key => ({
+      'Kunci Pengaturan': key,
+      'Nilai': String(data[key])
+    }));
+
+    const { error } = await supabase
+      .from('settings')
+      .upsert(updates, { onConflict: 'Kunci Pengaturan' });
+
+    if (error) throw error;
+
+    state.settings = { ...state.settings, ...data };
+    Swal.fire('Sukses', 'Pengaturan berhasil diperbarui dan langsung aktif!', 'success');
+  } catch (err) {
+    Swal.fire('Error', err.message || 'Gagal menyimpan pengaturan.', 'error');
+  }
 }
 
 function renderDashboardAnalytics() {
   if (state.view !== 'dashboard' || state.auth.role !== 'Owner') return;
 
-  const emps = state.data.employees.filter(e => e.status === 'Aktif' && e.peran !== 'Owner');
+  const emps = state.data.Employee.filter(e => e.Status === 'Aktif' && e.Peran !== 'Owner');
   const totalAktif = emps.length;
 
   const todayStr = formatDateToDDMMYYYY(new Date());
   const d = new Date();
   const currentMonthStr = `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 
-  const hadirHariIni = state.data.attendances.filter(a => a.tanggal === todayStr && a.status_kehadiran !== 'Alfa').length;
-  const pendingReqJadwal = state.data.schedule_changes.filter(r => r.status === 'Pending' || r.status === 'Minta Batal').length;
-  const pendingLembur = state.data.overtimes.filter(r => r.status === 'Pending').length;
+  const hadirHariIni = state.data.Attendance.filter(a => a.Tanggal === todayStr && a['Status Kehadiran'] !== 'Alfa').length;
+  const pendingReqJadwal = (state.data.PerubahanJadwal || []).filter(r => r.Status === 'Pending' || r.Status === 'Minta Batal').length;
+  const pendingLembur = (state.data.Lembur || []).filter(r => r.Status === 'Pending').length;
   const pendingReq = pendingReqJadwal + pendingLembur;
 
   const cardsContainer = document.getElementById('dashboardCards');
@@ -231,30 +356,34 @@ function renderDashboardAnalytics() {
   }
 
   let countTepat = 0, countTelat = 0, countAlfa = 0;
-  let attThisMonth = state.data.attendances.filter(a => a.tanggal && a.tanggal.includes(currentMonthStr));
+  let attThisMonth = state.data.Attendance.filter(a => a.Tanggal && a.Tanggal.includes(currentMonthStr) && emps.some(e => e.Nama === a['Nama Karyawan']));
+
   let employeeStats = {};
-  emps.forEach(e => { employeeStats[e.nama] = { tepat: 0, telat: 0, alfa: 0, score: 0 }; });
+  emps.forEach(e => { employeeStats[e.Nama] = { tepat: 0, telat: 0, alfa: 0, score: 0 }; });
 
   let totalBebanGajiKotor = 0;
   let totalPotonganDisiplin = 0;
 
   emps.forEach(emp => {
-    const name = emp.nama;
-    const gapok = parseFloat(emp.gaji_pokok || 0);
-    const tunjangan = parseFloat(emp.tunjangan_kehadiran || 0);
+    const name = emp.Nama;
+    const gapok = parseFloat(emp['Gaji Pokok'] || 0);
+    const tunjangan = parseFloat(emp['Tunjangan Kehadiran'] || 0);
     const upahHarian = gapok / 25;
     const dendaTelat = gapok / 50;
 
-    let empAlfa = 0, empTelat = 0, empSakitOpsiA = 0;
+    let empAlfa = 0;
+    let empTelat = 0;
+    let empSakitOpsiA = 0;
 
     attThisMonth.forEach(a => {
-      if (a.nama_karyawan !== name) return;
-      let jamPulang = a.jam_pulang ? a.jam_pulang.trim() : '';
-      let isLupaPulang = (jamPulang === '');
-      let status = a.status_kehadiran || 'Hadir';
-      let subStatus = a.sub_status || '';
+      if (a['Nama Karyawan'] !== name) return;
 
-      if (status === 'Alfa' || (isLupaPulang && a.tanggal !== todayStr)) {
+      let jamPulang = a['Jam Pulang'] ? a['Jam Pulang'].trim() : '';
+      let isLupaPulang = (jamPulang === '');
+      let status = a['Status Kehadiran'] || 'Hadir';
+      let subStatus = a['Sub-Status'] || '';
+
+      if (status === 'Alfa' || (isLupaPulang && a.Tanggal !== todayStr)) {
         countAlfa++; empAlfa++;
         employeeStats[name].alfa++;
         employeeStats[name].score -= 3;
@@ -294,35 +423,41 @@ function renderDashboardAnalytics() {
   });
 
   let totalKasbonBulanIni = 0;
-  state.data.deductions.forEach(p => {
-    if (p.tanggal && p.tanggal.includes(currentMonthStr)) {
-      totalKasbonBulanIni += parseFloat(p.nominal || 0);
-    }
-  });
-
+  if (state.data.Potongan) {
+    state.data.Potongan.forEach(p => {
+      if (p.Tanggal && p.Tanggal.includes(currentMonthStr) && emps.some(e => e.Nama === p['Nama Karyawan'])) {
+        totalKasbonBulanIni += parseFloat(p.Nominal || 0);
+      }
+    });
+  }
   let totalDeduction = totalPotonganDisiplin + totalKasbonBulanIni;
 
   const ctxDisiplin = document.getElementById('chartDisiplin');
   if (ctxDisiplin) {
     if (chartInstances.disiplin) chartInstances.disiplin.destroy();
-    chartInstances.disiplin = new Chart(ctxDisiplin, {
-      type: 'doughnut',
-      data: {
-        labels: ['Tepat Waktu', 'Terlambat', 'Alfa / Lupa Pulang'],
-        datasets: [{
-          data: [countTepat || 1, countTelat, countAlfa],
-          backgroundColor: countTepat + countTelat + countAlfa === 0 ? ['#f3f4f6'] : ['#34d399', '#fbbf24', '#f43f5e'],
-          borderWidth: 0,
-          hoverOffset: 4
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: '75%',
-        plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } } }
-      }
-    });
+    if (countTepat === 0 && countTelat === 0 && countAlfa === 0) {
+      chartInstances.disiplin = new Chart(ctxDisiplin, {
+        type: 'doughnut',
+        data: { labels: ['Belum ada data'], datasets: [{ data: [1], backgroundColor: ['#f3f4f6'] }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
+      });
+    } else {
+      chartInstances.disiplin = new Chart(ctxDisiplin, {
+        type: 'doughnut',
+        data: {
+          labels: ['Tepat Waktu', 'Terlambat', 'Alfa / Lupa Pulang'],
+          datasets: [{
+            data: [countTepat, countTelat, countAlfa],
+            backgroundColor: ['#34d399', '#fbbf24', '#f43f5e'],
+            borderWidth: 0, hoverOffset: 4
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '75%',
+          plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } } }
+        }
+      });
+    }
   }
 
   const ctxKeuangan = document.getElementById('chartKeuangan');
@@ -333,26 +468,24 @@ function renderDashboardAnalytics() {
       data: {
         labels: ['Estimasi Gaji Kotor', 'Total Denda & Kasbon'],
         datasets: [{
-          label: 'Rupiah',
+          label: 'Rupiah (Bulan Ini)',
           data: [totalBebanGajiKotor, totalDeduction],
           backgroundColor: ['#023047', '#ff8fa3'],
-          borderRadius: 6,
-          barPercentage: 0.5
+          borderRadius: 6, barPercentage: 0.5
         }]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => 'Rp ' + ctx.raw.toLocaleString('id-ID') } } },
         scales: {
-          y: { beginAtZero: true, grid: { color: '#f3f4f6', drawBorder: false }, ticks: { font: { size: 10 }, callback: (v) => 'Rp ' + (v / 1000) + 'K' } },
+          y: { beginAtZero: true, grid: { color: '#f3f4f6', drawBorder: false }, ticks: { font: { size: 10 }, callback: (val) => 'Rp ' + (val / 1000) + 'K' } },
           x: { grid: { display: false } }
         }
       }
     });
   }
 
-  let rankedEmps = Object.keys(employeeStats).map(nama => ({ nama, ...employeeStats[nama] }));
+  let rankedEmps = Object.keys(employeeStats).map(nama => ({ nama: nama, ...employeeStats[nama] }));
   rankedEmps.sort((a, b) => b.score - a.score);
 
   const lbTop = document.getElementById('leaderboardTop');
@@ -360,185 +493,160 @@ function renderDashboardAnalytics() {
 
   if (lbTop) {
     let top3 = rankedEmps.slice(0, 3).filter(x => x.score > 0 || x.tepat > 0);
-    lbTop.innerHTML = top3.length === 0 ? `<p class="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-2xl border border-gray-100">Belum ada data kedisiplinan bulan ini.</p>` :
-      top3.map((x, i) => `
-        <div class="flex items-center justify-between p-3 rounded-2xl bg-emerald-50 border border-emerald-100">
+    if (top3.length === 0) {
+      lbTop.innerHTML = `<p class="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-2xl border border-gray-100">Belum ada data kedisiplinan bulan ini.</p>`;
+    } else {
+      lbTop.innerHTML = top3.map((x, i) => `
+        <div class="flex items-center justify-between p-3 rounded-2xl bg-emerald-50 border border-emerald-100 transition-transform hover:scale-[1.02]">
           <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-full bg-emerald-200 text-emerald-700 flex items-center justify-center font-black text-xs">#${i + 1}</div>
+            <div class="w-8 h-8 rounded-full bg-emerald-200 text-emerald-700 flex items-center justify-center font-black text-xs shadow-inner">#${i + 1}</div>
             <div><p class="text-xs font-bold text-brandText">${x.nama}</p><p class="text-[10px] text-emerald-600 font-semibold"><i class="fa-solid fa-check mr-1"></i>${x.tepat} Tepat Waktu</p></div>
           </div>
-          <i class="fa-solid fa-medal text-emerald-400 text-xl"></i>
+          <i class="fa-solid fa-medal text-emerald-400 text-xl drop-shadow-sm"></i>
         </div>
       `).join('');
+    }
   }
 
   if (lbBot) {
     let bot3 = [...rankedEmps].reverse().slice(0, 3).filter(x => x.telat > 0 || x.alfa > 0);
-    lbBot.innerHTML = bot3.length === 0 ? `<p class="text-xs text-emerald-500 text-center py-4 bg-emerald-50 rounded-2xl border border-emerald-100 font-bold"><i class="fa-solid fa-party-horn mr-1"></i> Hebat! Belum ada pelanggaran bulan ini.</p>` :
-      bot3.map((x) => `
-        <div class="flex items-center justify-between p-3 rounded-2xl bg-rose-50 border border-rose-100">
+    if (bot3.length === 0) {
+      lbBot.innerHTML = `<p class="text-xs text-emerald-500 text-center py-4 bg-emerald-50 rounded-2xl border border-emerald-100 font-bold"><i class="fa-solid fa-party-horn mr-1"></i> Hebat! Belum ada pelanggaran bulan ini.</p>`;
+    } else {
+      lbBot.innerHTML = bot3.map((x) => `
+        <div class="flex items-center justify-between p-3 rounded-2xl bg-rose-50 border border-rose-100 transition-transform hover:scale-[1.02]">
           <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-full bg-rose-200 text-rose-700 flex items-center justify-center font-black text-xs"><i class="fa-solid fa-triangle-exclamation"></i></div>
+            <div class="w-8 h-8 rounded-full bg-rose-200 text-rose-700 flex items-center justify-center font-black text-xs shadow-inner"><i class="fa-solid fa-triangle-exclamation"></i></div>
             <div><p class="text-xs font-bold text-brandText">${x.nama}</p><p class="text-[10px] text-rose-600 font-semibold">${x.telat} Telat, ${x.alfa} Alfa</p></div>
           </div>
         </div>
       `).join('');
+    }
   }
 }
 
-function renderEmployeeTable() {
-  const table = document.getElementById('table-employee');
-  if (!table) return;
-  const list = state.data.employees.filter(e => e.peran !== 'Owner');
+function downloadSlipPDF() {
+  const slipArea = document.getElementById('slip-print-area');
+  const nama = document.getElementById('slip-nama').innerText.replace(/\s+/g, '_');
+  const periode = document.getElementById('slip-periode').innerText.replace(/\//g, '-');
+  const fileName = `Slip_Gaji_${nama}_${periode}.pdf`;
 
-  if (list.length === 0) {
-    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500" colspan="7">Tidak ada data karyawan</td></tr>`;
+  const opt = {
+    margin: 0.2,
+    filename: fileName,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+  };
+
+  Swal.fire({ title: 'Membuat PDF...', text: 'Menyusun dokumen slip resmi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  html2pdf().set(opt).from(slipArea).save().then(() => {
+    Swal.close();
+  }).catch(err => {
+    Swal.fire('Error', 'Gagal membuat PDF: ' + err.message, 'error');
+  });
+}
+
+function exportPayrollExcel() {
+  if (!state.data.Payroll || state.data.Payroll.length === 0) {
+    Swal.fire('Oops', 'Belum ada data Payroll di database!', 'warning');
     return;
   }
 
-  let html = `<thead><tr class="bg-gray-50 border-b border-gray-100">
-    <th class="p-4 font-bold text-gray-600">ID</th>
-    <th class="p-4 font-bold text-gray-600">Nama</th>
-    <th class="p-4 font-bold text-gray-600">Gaji Pokok</th>
-    <th class="p-4 font-bold text-gray-600">Tunjangan</th>
-    <th class="p-4 font-bold text-gray-600">Utang Hari</th>
-    <th class="p-4 font-bold text-gray-600">Status</th>
-    <th class="p-4 font-bold text-gray-600 text-center">Aksi</th>
-  </tr></thead><tbody>`;
+  const periodInput = document.getElementById('payrollPeriod').value;
+  let targetData = state.data.Payroll;
+  let fileNamePeriod = 'All';
 
-  list.forEach(row => {
-    let statusBg = row.status === 'Aktif' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
-    let utangBadge = row.utang_hari > 0 ? `<span class="text-rose-600 font-bold bg-rose-50 border border-rose-200 px-2 py-1 rounded-lg"><i class="fa-solid fa-triangle-exclamation mr-1"></i> ${row.utang_hari} Hari</span>` : `<span class="text-gray-400 font-bold">0</span>`;
+  if (periodInput) {
+    const formattedPeriod = `${periodInput.split('-')[1]}/${periodInput.split('-')[0]}`;
+    targetData = state.data.Payroll.filter(p => p.Periode === formattedPeriod);
+    fileNamePeriod = formattedPeriod.replace('/', '-');
+  }
 
-    html += `<tr class="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-      <td class="p-4 font-mono text-xs">${row.id}</td>
-      <td class="p-4 font-bold">${row.nama}</td>
-      <td class="p-4">Rp ${Number(row.gaji_pokok || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4">Rp ${Number(row.tunjangan_kehadiran || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4">${utangBadge}</td>
-      <td class="p-4"><span class="px-2 py-1 rounded-full text-xs font-bold ${statusBg}">${row.status}</span></td>
-      <td class="p-4 text-center">
-        <button onclick="editEmployee('${row.id}')" class="text-brandPink bg-brandPink/10 px-3 py-1.5 rounded-lg shadow-sm hover:scale-105 transition-transform"><i class="fa-solid fa-pen-to-square"></i></button>
-      </td>
-    </tr>`;
-  });
-
-  table.innerHTML = html + `</tbody>`;
-}
-
-function renderAttendanceTable() {
-  const table = document.getElementById('table-attendance');
-  if (!table) return;
-  const list = state.data.attendances;
-
-  if (list.length === 0) {
-    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500" colspan="8">Tidak ada riwayat absensi</td></tr>`;
+  if (targetData.length === 0) {
+    Swal.fire('Info', 'Tidak ada data Payroll pada periode yang dipilih.', 'info');
     return;
   }
 
-  let html = `<thead><tr class="bg-gray-50 border-b border-gray-100">
-    <th class="p-4 font-bold text-gray-600">Tanggal</th>
-    <th class="p-4 font-bold text-gray-600">Nama Karyawan</th>
-    <th class="p-4 font-bold text-gray-600">Jam Masuk</th>
-    <th class="p-4 font-bold text-gray-600">Jam Pulang</th>
-    <th class="p-4 font-bold text-gray-600">Status</th>
-    <th class="p-4 font-bold text-gray-600">Sub-Status</th>
-    <th class="p-4 font-bold text-gray-600">Lokasi</th>
-    <th class="p-4 font-bold text-gray-600">Bukti Foto</th>
-  </tr></thead><tbody>`;
+  Swal.fire({ title: 'Mengekspor Excel...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
-  list.forEach(row => {
-    let mapsLink = row.lokasi_maps ? `<a href="${row.lokasi_maps}" target="_blank" class="text-blue-500 underline text-xs font-bold">Buka Maps</a>` : '-';
-    let photoLink = row.foto_absensi ? `<a href="${row.foto_absensi}" target="_blank" class="text-brandPink underline text-xs font-bold">Lihat Foto</a>` : '-';
+  try {
+    const exportData = targetData.map(row => ({
+      'Periode': row.Periode,
+      'Nama Karyawan': row['Nama Karyawan'],
+      'Gaji Pokok': parseFloat(row['Gaji Pokok'] || 0),
+      'Tunjangan': parseFloat(row['Tunjangan'] || 0),
+      'Uang Lembur': parseFloat(row['Uang Lembur'] || 0),
+      'Potongan Telat': parseFloat(row['Potongan Telat'] || 0),
+      'Potongan Alfa': parseFloat(row['Potongan Alfa'] || 0),
+      'Potongan Lain': parseFloat(row['Potongan Lain'] || 0),
+      'Total Gaji Bersih': parseFloat(row['Total Gaji Bersih'] || 0)
+    }));
 
-    html += `<tr class="border-b border-gray-50 hover:bg-gray-50/50">
-      <td class="p-4 font-bold">${row.tanggal}</td>
-      <td class="p-4">${row.nama_karyawan}</td>
-      <td class="p-4 text-emerald-600 font-bold">${row.jam_masuk || '--:--'}</td>
-      <td class="p-4 text-rose-500 font-bold">${row.jam_pulang || '--:--'}</td>
-      <td class="p-4"><span class="px-2 py-1 bg-gray-100 rounded-lg text-xs font-bold">${row.status_kehadiran}</span></td>
-      <td class="p-4 text-xs text-gray-500">${row.sub_status || '-'}</td>
-      <td class="p-4">${mapsLink}</td>
-      <td class="p-4">${photoLink}</td>
-    </tr>`;
-  });
-
-  table.innerHTML = html + `</tbody>`;
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap_Payroll');
+    XLSX.writeFile(wb, `Rekap_Payroll_AraBeauty_${fileNamePeriod}.xlsx`);
+    Swal.close();
+  } catch (error) {
+    Swal.fire('Error', 'Gagal mengekspor data: ' + error.message, 'error');
+  }
 }
 
-function renderPotonganTable() {
-  const table = document.getElementById('table-potongan');
+function renderTable(type, headers, data, isPayroll = false, isEmployee = false) {
+  const table = document.getElementById(`table-${type}`);
   if (!table) return;
-  const list = state.data.deductions;
+  if (!data || data.length === 0) {
+    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500" colspan="10">Tidak ada data</td></tr>`;
+    return;
+  }
 
-  let html = `<thead><tr class="bg-gray-50 border-b border-gray-100">
-    <th class="p-4 font-bold text-gray-600">Tanggal</th>
-    <th class="p-4 font-bold text-gray-600">Nama</th>
-    <th class="p-4 font-bold text-gray-600">Jenis</th>
-    <th class="p-4 font-bold text-gray-600">Nominal</th>
-    <th class="p-4 font-bold text-gray-600">Keterangan</th>
-  </tr></thead><tbody>`;
+  let thead = `<thead><tr class="bg-gray-50 border-b border-gray-100">`;
+  headers.forEach(h => { thead += `<th class="p-4 font-bold text-gray-600 whitespace-nowrap">${h}</th>`; });
+  if (isPayroll || isEmployee) thead += `<th class="p-4 font-bold text-gray-600 text-center">Aksi</th>`;
+  thead += `</tr></thead><tbody>`;
 
-  list.forEach(row => {
-    html += `<tr class="border-b border-gray-50 hover:bg-gray-50/50">
-      <td class="p-4 font-bold">${row.tanggal}</td>
-      <td class="p-4">${row.nama_karyawan}</td>
-      <td class="p-4"><span class="px-2 py-1 bg-gray-100 rounded text-xs font-bold">${row.jenis}</span></td>
-      <td class="p-4 text-rose-600 font-bold">Rp ${Number(row.nominal || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 text-xs text-gray-500">${row.keterangan}</td>
-    </tr>`;
+  data.forEach(row => {
+    thead += `<tr class="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">`;
+    headers.forEach(h => {
+      let val = row[h] !== undefined ? row[h] : '';
+      if ((h.includes('Gaji') || h.includes('Tunjangan') || h.includes('Potongan') || h.includes('Uang Lembur') || h === 'Nominal') && val !== '' && !isNaN(val)) {
+        val = 'Rp ' + Number(val).toLocaleString('id-ID');
+      }
+      if (h === 'Status') {
+        let color = val === 'Aktif' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
+        val = `<span class="px-2 py-1 rounded-full text-xs font-bold ${color}">${val}</span>`;
+      }
+      if (h === 'Utang Hari') {
+        val = parseInt(val) > 0 ? `<span class="text-rose-600 font-bold bg-rose-50 border border-rose-200 px-2 py-1 rounded-lg shadow-sm"><i class="fa-solid fa-triangle-exclamation mr-1"></i> ${val} Hari</span>` : `<span class="text-gray-400 font-bold">${val || 0}</span>`;
+      }
+      if (h === 'Lokasi Maps' && val) {
+        val = `<a href="${val}" target="_blank" class="text-blue-500 underline text-xs font-bold">Buka Maps</a>`;
+      }
+      if (h === 'Foto Absensi' && val) {
+        val = `<a href="${val}" target="_blank" class="text-brandPink underline text-xs font-bold">Lihat Foto</a>`;
+      }
+      thead += `<td class="p-4">${val}</td>`;
+    });
+
+    if (isPayroll) thead += `<td class="p-4 text-center"><button onclick="showEmpSlipDetailOwner('${row.ID}')" class="text-brandPink hover:text-brandPinkDark bg-brandPink/10 px-3 py-1.5 rounded-lg shadow-sm transition-transform hover:scale-105" title="Cetak Slip"><i class="fa-solid fa-print"></i></button></td>`;
+    if (isEmployee) thead += `<td class="p-4 text-center"><button onclick="editEmployee('${row.ID}')" class="text-brandPink hover:text-brandPinkDark bg-brandPink/10 px-3 py-1.5 rounded-lg shadow-sm transition-transform hover:scale-105"><i class="fa-solid fa-pen-to-square"></i></button></td>`;
+    thead += `</tr>`;
   });
-
-  table.innerHTML = html + `</tbody>`;
-}
-
-function renderPayrollTable() {
-  const table = document.getElementById('table-payroll');
-  if (!table) return;
-  const list = state.data.payrolls;
-
-  let html = `<thead><tr class="bg-gray-50 border-b border-gray-100">
-    <th class="p-4 font-bold text-gray-600">Periode</th>
-    <th class="p-4 font-bold text-gray-600">Karyawan</th>
-    <th class="p-4 font-bold text-gray-600">Gaji Pokok</th>
-    <th class="p-4 font-bold text-gray-600">Tunjangan</th>
-    <th class="p-4 font-bold text-gray-600">Lembur</th>
-    <th class="p-4 font-bold text-gray-600">Pot. Telat</th>
-    <th class="p-4 font-bold text-gray-600">Pot. Alfa</th>
-    <th class="p-4 font-bold text-gray-600">Pot. Lain</th>
-    <th class="p-4 font-bold text-gray-600">Total Bersih</th>
-    <th class="p-4 font-bold text-gray-600 text-center">Aksi</th>
-  </tr></thead><tbody>`;
-
-  list.forEach(row => {
-    html += `<tr class="border-b border-gray-50 hover:bg-gray-50/50">
-      <td class="p-4 font-bold">${row.periode}</td>
-      <td class="p-4 font-bold">${row.nama_karyawan}</td>
-      <td class="p-4">Rp ${Number(row.gaji_pokok || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4">Rp ${Number(row.tunjangan || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 text-emerald-600 font-bold">+ Rp ${Number(row.uang_lembur || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 text-rose-500">- Rp ${Number(row.potongan_telat || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 text-rose-500">- Rp ${Number(row.potongan_alfa || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 text-rose-500">- Rp ${Number(row.potongan_lain || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 font-black text-brandPink">Rp ${Number(row.total_gaji_bersih || 0).toLocaleString('id-ID')}</td>
-      <td class="p-4 text-center">
-        <button onclick="showEmpSlipDetail('${row.id}')" class="text-brandPink bg-brandPink/10 px-3 py-1.5 rounded-lg shadow-sm hover:scale-105 transition-transform"><i class="fa-solid fa-print"></i></button>
-      </td>
-    </tr>`;
-  });
-
-  table.innerHTML = html + `</tbody>`;
+  table.innerHTML = thead + `</tbody>`;
 }
 
 function getShiftForEmp(empProfile, dateStr) {
   if (!empProfile) return 'L';
 
-  let override = state.data.shifts.find(s => s.nama_karyawan === empProfile.nama && s.tanggal === dateStr);
-  if (override && override.tipe_shift) {
-    let t = override.tipe_shift.toLowerCase();
-    if (t.includes('pagi')) return 'P';
-    if (t.includes('siang')) return 'S';
-    return 'L';
+  if (state.data.Shift && state.data.Shift.length > 0) {
+    let override = state.data.Shift.find(s => s['Nama Karyawan'] === empProfile.Nama && s.Tanggal === dateStr);
+    if (override && override['Tipe Shift']) {
+      let t = override['Tipe Shift'].toLowerCase();
+      if (t.includes('pagi')) return 'P';
+      if (t.includes('siang')) return 'S';
+      return 'L';
+    }
   }
 
   if (!dateStr) return 'L';
@@ -546,17 +654,18 @@ function getShiftForEmp(empProfile, dateStr) {
   if (parts.length < 3) return 'L';
   const d = new Date(parts[2], parts[1] - 1, parts[0]);
   const dayIndex = d.getDay();
-  const dayMap = { 1: 'shift_sen', 2: 'shift_sel', 3: 'shift_rab', 4: 'shift_kam', 5: 'shift_jum', 6: 'shift_sab', 0: 'shift_min' };
-  return empProfile[dayMap[dayIndex]] || 'L';
+  const dayMap = { 1: 'Shift Sen', 2: 'Shift Sel', 3: 'Shift Rab', 4: 'Shift Kam', 5: 'Shift Jum', 6: 'Shift Sab', 0: 'Shift Min' };
+  const shiftCol = dayMap[dayIndex];
+  return empProfile[shiftCol] || 'L';
 }
 
 function renderShiftCalendar() {
   const table = document.getElementById('table-shift');
   if (!table) return;
 
-  const emps = state.data.employees.filter(e => e.status === 'Aktif' && e.peran !== 'Owner');
+  const emps = state.data.Employee.filter(e => e.Status === 'Aktif' && e.Peran !== 'Owner');
   if (emps.length === 0) {
-    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500">Belum ada karyawan aktif</td></tr>`;
+    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500">Belum ada data karyawan aktif</td></tr>`;
     return;
   }
 
@@ -586,43 +695,49 @@ function renderShiftCalendar() {
 
   const hariList = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
   let thead = `<thead><tr class="bg-gray-50 border-b border-gray-100 shadow-sm">
-    <th class="p-4 font-bold text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[150px]">Nama Karyawan</th>`;
+      <th class="p-4 font-bold text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[150px] shadow-[2px_0_5px_rgba(0,0,0,0.02)]">Nama Karyawan</th>`;
 
   dates.forEach(d => {
     let dateStr = formatDateToDDMMYYYY(d);
     let dayName = hariList[d.getDay()];
     let count = shiftCounts[dateStr];
     let isWarning = count.P < minPagi || count.S < minSiang;
-    let warningIcon = isWarning ? `<i class="fa-solid fa-circle-exclamation text-rose-500 animate-pulse ml-1 text-sm"></i>` : `<i class="fa-solid fa-circle-check text-emerald-400 ml-1 text-sm"></i>`;
+    let warningIcon = isWarning
+      ? `<i class="fa-solid fa-circle-exclamation text-rose-500 animate-pulse ml-1 text-sm" title="Kekurangan Staff!"></i>`
+      : `<i class="fa-solid fa-circle-check text-emerald-400 ml-1 text-sm"></i>`;
 
-    thead += `<th class="p-3 text-center min-w-[100px] border-l border-gray-100 cursor-pointer hover:bg-gray-100" onclick="showShiftWarningModal('${dateStr}', '${dayName}', ${count.P}, ${minPagi}, ${count.S}, ${minSiang})">
-      <div class="text-[10px] text-gray-400 uppercase">${dayName}</div>
-      <div class="text-sm font-black flex items-center justify-center">${d.getDate()}/${d.getMonth() + 1} ${warningIcon}</div>
+    thead += `<th class="p-3 text-center min-w-[100px] border-l border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors" onclick="showShiftWarningModal('${dateStr}', '${dayName}', ${count.P}, ${minPagi}, ${count.S}, ${minSiang})">
+        <div class="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">${dayName}</div>
+        <div class="text-sm font-black text-brandText flex items-center justify-center">${d.getDate()}/${d.getMonth() + 1} ${warningIcon}</div>
     </th>`;
   });
-  thead += `</tr></thead><tbody>`;
+  thead += `</tr></thead>`;
 
+  let tbody = `<tbody>`;
   emps.forEach(emp => {
-    thead += `<tr class="border-b border-gray-50 hover:bg-gray-50/50">
-      <td class="p-4 font-bold sticky left-0 bg-white z-10">${emp.nama}</td>`;
+    tbody += `<tr class="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+        <td class="p-4 font-bold text-brandText sticky left-0 bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)]">${emp.Nama}</td>`;
 
     dates.forEach(d => {
       let dateStr = formatDateToDDMMYYYY(d);
       let currentCode = getShiftForEmp(emp, dateStr);
-      let bgSelect = currentCode === 'P' ? 'bg-emerald-50 text-emerald-700 font-bold' : currentCode === 'S' ? 'bg-amber-50 text-amber-700 font-bold' : 'bg-rose-50 text-rose-700 font-bold';
+      let bgSelect = currentCode === 'P' ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100' :
+                     currentCode === 'S' ? 'bg-amber-50 text-amber-700 font-bold border-amber-100' :
+                     'bg-rose-50 text-rose-700 font-bold border-rose-100';
 
-      thead += `<td class="p-2 border-l border-gray-50 text-center">
-        <select onchange="updateShiftByOwner('${emp.nama}', '${dateStr}', this.value)" class="w-full text-xs p-2 rounded-xl border text-center ${bgSelect}">
-          <option value="P" ${currentCode === 'P' ? 'selected' : ''}>Pagi</option>
-          <option value="S" ${currentCode === 'S' ? 'selected' : ''}>Siang</option>
-          <option value="L" ${currentCode === 'L' ? 'selected' : ''}>Libur</option>
-        </select>
+      tbody += `<td class="p-2 border-l border-gray-50 text-center">
+          <select onchange="updateShiftByOwner('${emp.Nama}', '${dateStr}', this.value)" class="w-full text-xs p-2 rounded-xl outline-none cursor-pointer text-center appearance-none border shadow-sm transition-transform hover:scale-105 ${bgSelect}">
+              <option value="P" ${currentCode === 'P' ? 'selected' : ''}>Pagi</option>
+              <option value="S" ${currentCode === 'S' ? 'selected' : ''}>Siang</option>
+              <option value="L" ${currentCode === 'L' ? 'selected' : ''}>Libur</option>
+          </select>
       </td>`;
     });
-    thead += `</tr>`;
+    tbody += `</tr>`;
   });
+  tbody += `</tbody>`;
 
-  table.innerHTML = thead + `</tbody>`;
+  table.innerHTML = thead + tbody;
 }
 
 function showShiftWarningModal(dateStr, dayName, countP, minP, countS, minS) {
@@ -630,27 +745,31 @@ function showShiftWarningModal(dateStr, dayName, countP, minP, countS, minS) {
   const content = document.getElementById('msd-content');
 
   let pStatus = countP >= minP
-    ? `<span class="text-emerald-500 font-black text-xs uppercase bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"><i class="fa-solid fa-check mr-1"></i>Aman</span>`
-    : `<span class="text-rose-500 font-black text-xs uppercase bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1 animate-pulse"></i>Kurang ${minP - countP} Orang</span>`;
+    ? `<span class="text-emerald-500 font-black text-xs uppercase tracking-wider bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"><i class="fa-solid fa-check mr-1"></i>Aman</span>`
+    : `<span class="text-rose-500 font-black text-xs uppercase tracking-wider bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1 animate-pulse"></i>Kurang ${minP - countP} Orang</span>`;
 
   let sStatus = countS >= minS
-    ? `<span class="text-emerald-500 font-black text-xs uppercase bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"><i class="fa-solid fa-check mr-1"></i>Aman</span>`
-    : `<span class="text-rose-500 font-black text-xs uppercase bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1 animate-pulse"></i>Kurang ${minS - countS} Orang</span>`;
+    ? `<span class="text-emerald-500 font-black text-xs uppercase tracking-wider bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"><i class="fa-solid fa-check mr-1"></i>Aman</span>`
+    : `<span class="text-rose-500 font-black text-xs uppercase tracking-wider bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1 animate-pulse"></i>Kurang ${minS - countS} Orang</span>`;
 
   content.innerHTML = `
-    <div class="p-4 rounded-2xl border ${countP < minP ? 'border-rose-200 bg-rose-50/50' : 'border-gray-100 bg-gray-50'} mb-3">
+    <div class="p-4 rounded-2xl border ${countP < minP ? 'border-rose-200 bg-rose-50/50' : 'border-gray-100 bg-gray-50'} mb-3 transition-colors">
       <div class="flex justify-between items-center mb-2">
-        <span class="text-[11px] font-bold text-gray-500 uppercase">Shift Pagi</span>
+        <span class="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Shift Pagi</span>
         ${pStatus}
       </div>
-      <div class="text-sm font-black text-brandText flex items-end gap-2">${countP} Karyawan (Min: ${minP})</div>
+      <div class="text-sm font-black text-brandText flex items-end gap-2">
+        ${countP} Karyawan <span class="text-[10px] text-gray-400 font-bold uppercase pb-0.5">(Syarat Min: ${minP})</span>
+      </div>
     </div>
-    <div class="p-4 rounded-2xl border ${countS < minS ? 'border-rose-200 bg-rose-50/50' : 'border-gray-100 bg-gray-50'}">
+    <div class="p-4 rounded-2xl border ${countS < minS ? 'border-rose-200 bg-rose-50/50' : 'border-gray-100 bg-gray-50'} transition-colors">
       <div class="flex justify-between items-center mb-2">
-        <span class="text-[11px] font-bold text-gray-500 uppercase">Shift Siang</span>
+        <span class="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Shift Siang</span>
         ${sStatus}
       </div>
-      <div class="text-sm font-black text-brandText flex items-end gap-2">${countS} Karyawan (Min: ${minS})</div>
+      <div class="text-sm font-black text-brandText flex items-end gap-2">
+        ${countS} Karyawan <span class="text-[10px] text-gray-400 font-bold uppercase pb-0.5">(Syarat Min: ${minS})</span>
+      </div>
     </div>
   `;
   openModal('modal-shift-detail');
@@ -658,25 +777,33 @@ function showShiftWarningModal(dateStr, dayName, countP, minP, countS, minS) {
 
 async function updateShiftByOwner(empName, dateStr, newCode) {
   Swal.fire({ title: 'Menyimpan Jadwal...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-  let shiftText = newCode === 'P' ? 'Pagi' : (newCode === 'S' ? 'Siang' : 'Libur');
-
   try {
-    const { data: existing } = await supabase
-      .from('shifts')
-      .select('id')
-      .eq('nama_karyawan', empName)
-      .eq('tanggal', dateStr);
+    const shiftText = newCode === 'P' ? 'Pagi' : (newCode === 'S' ? 'Siang' : 'Libur');
+    const existing = (state.data.Shift || []).find(s => s.Tanggal === dateStr && s['Nama Karyawan'] === empName);
 
-    if (existing && existing.length > 0) {
-      await supabase.from('shifts').update({ tipe_shift: shiftText }).eq('id', existing[0].id);
+    if (existing) {
+      const { error } = await supabase
+        .from('shifts')
+        .update({ 'Tipe Shift': shiftText })
+        .eq('ID', existing.ID);
+      if (error) throw error;
     } else {
-      await supabase.from('shifts').insert([{ nama_karyawan: empName, tanggal: dateStr, tipe_shift: shiftText }]);
+      const newId = generateSeqID('SHF', state.data.Shift);
+      const { error } = await supabase
+        .from('shifts')
+        .insert([{
+          'ID': newId,
+          'Tanggal': dateStr,
+          'Nama Karyawan': empName,
+          'Tipe Shift': shiftText
+        }]);
+      if (error) throw error;
     }
 
     Swal.close();
-    loadAllData();
+    loadData();
   } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire('Error', err.message || 'Gagal menyimpan perubahan shift.', 'error');
   }
 }
 
@@ -686,121 +813,168 @@ function shiftNavNext() { shiftState.startDate.setDate(shiftState.startDate.getD
 function onShiftDateChange(val) { if (val) { shiftState.startDate = new Date(val); renderShiftCalendar(); } }
 function setShiftRange(days) {
   shiftState.rangeDays = days;
-  document.getElementById('btnRange7').className = days === 7 ? 'px-3 py-1 rounded-lg font-bold bg-white shadow-sm text-brandText border border-gray-100' : 'px-3 py-1 rounded-lg font-bold text-gray-400 hover:text-brandText';
-  document.getElementById('btnRange14').className = days === 14 ? 'px-3 py-1 rounded-lg font-bold bg-white shadow-sm text-brandText border border-gray-100' : 'px-3 py-1 rounded-lg font-bold text-gray-400 hover:text-brandText';
+  document.getElementById('btnRange7').className = days === 7 ? 'px-3 py-1 rounded-lg font-bold bg-white shadow-sm text-brandText border border-gray-100' : 'px-3 py-1 rounded-lg font-bold text-gray-400 hover:text-brandText transition-colors';
+  document.getElementById('btnRange14').className = days === 14 ? 'px-3 py-1 rounded-lg font-bold bg-white shadow-sm text-brandText border border-gray-100' : 'px-3 py-1 rounded-lg font-bold text-gray-400 hover:text-brandText transition-colors';
   renderShiftCalendar();
 }
 
 function renderPengajuanOwner() {
   const table = document.getElementById('table-cuti');
   if (!table) return;
-  let reqs = state.data.schedule_changes;
+  let reqs = state.data.PerubahanJadwal || [];
+
+  reqs.sort((a, b) => {
+    if (a.Status === 'Pending' && b.Status !== 'Pending') return -1;
+    if (a.Status !== 'Pending' && b.Status === 'Pending') return 1;
+    return parseInt(b.ID.split('-')[1] || 0) - parseInt(a.ID.split('-')[1] || 0);
+  });
 
   if (reqs.length === 0) {
-    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500 font-bold" colspan="6">Tidak ada pengajuan jadwal</td></tr>`;
+    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500 font-bold" colspan="6">Tidak ada riwayat pengajuan.</td></tr>`;
     return;
   }
 
-  let html = `<thead><tr class="bg-gray-50 border-b border-gray-100">
-    <th class="p-4 font-bold text-gray-600">ID</th>
-    <th class="p-4 font-bold text-gray-600">Karyawan</th>
-    <th class="p-4 font-bold text-gray-600">Jenis</th>
-    <th class="p-4 font-bold text-gray-600">Detail</th>
-    <th class="p-4 font-bold text-gray-600">Alasan</th>
-    <th class="p-4 font-bold text-gray-600 text-center">Status & Aksi</th>
+  let thead = `<thead><tr class="bg-gray-50 border-b border-gray-100">
+      <th class="p-4 font-bold text-gray-600 whitespace-nowrap">ID TIKET</th>
+      <th class="p-4 font-bold text-gray-600">Karyawan</th>
+      <th class="p-4 font-bold text-gray-600">Jenis Pengajuan</th>
+      <th class="p-4 font-bold text-gray-600">Detail Pertukaran</th>
+      <th class="p-4 font-bold text-gray-600">Alasan</th>
+      <th class="p-4 font-bold text-gray-600 text-center">Status & Aksi</th>
   </tr></thead><tbody>`;
 
   reqs.forEach(r => {
-    let detail = r.jenis === 'Tukar Hari Libur' ? `Libur ${r.tgl_1} ➔ ${r.tgl_2}` : `${r.tgl_1} ➔ Shift ${r.shift_tujuan === 'P' ? 'Pagi' : 'Siang'}`;
-    let bgStatus = r.status === 'Disetujui' ? 'bg-emerald-100 text-emerald-700' : r.status.includes('Tolak') ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700';
+    let detail = '';
+    if (r.Jenis === 'Tukar Hari Libur') {
+      detail = `Libur tgl <span class="font-black text-brandText">${r['Tgl 1']}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> <span class="font-black text-brandText">${r['Tgl 2']}</span>`;
+    } else {
+      let targetShift = r['Shift Tujuan'] === 'P' ? 'PAGI' : (r['Shift Tujuan'] === 'S' ? 'SIANG' : 'LIBUR');
+      detail = `Tgl <span class="font-black text-brandText">${r['Tgl 1']}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Ke Shift <span class="font-black text-brandText">${targetShift}</span>`;
+    }
 
-    let aksi = (r.status === 'Pending' || r.status === 'Minta Batal') ? `
-      <div class="mt-2 flex justify-center gap-2">
-        <button onclick="processScheduleReq('${r.id}', 'Disetujui')" class="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-xs font-bold border border-emerald-200"><i class="fa-solid fa-check mr-1"></i>ACC</button>
-        <button onclick="processScheduleReq('${r.id}', 'Ditolak')" class="bg-rose-50 text-rose-700 px-3 py-1 rounded-lg text-xs font-bold border border-rose-200"><i class="fa-solid fa-xmark mr-1"></i>Tolak</button>
-      </div>` : '';
+    let aksi = '';
+    let bgStatus = r.Status === 'Disetujui' ? 'bg-emerald-100 text-emerald-700' : (r.Status.includes('Tolak') || r.Status.includes('Batal') ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700');
 
-    html += `<tr class="border-b border-gray-50 hover:bg-gray-50/50">
-      <td class="p-4 font-mono text-xs">${r.id}</td>
-      <td class="p-4 font-bold">${r.nama_karyawan}</td>
-      <td class="p-4"><span class="bg-gray-100 px-2 py-1 rounded text-xs font-bold">${r.jenis}</span></td>
-      <td class="p-4 text-xs font-semibold">${detail}</td>
-      <td class="p-4 text-xs text-gray-500 italic">"${r.alasan}"</td>
-      <td class="p-4 text-center"><span class="px-3 py-1 rounded-full text-[10px] font-black uppercase ${bgStatus}">${r.status}</span>${aksi}</td>
+    if (r.Status === 'Pending' || r.Status === 'Minta Batal') {
+      aksi = `<div class="mt-2.5 flex justify-center gap-2">
+          <button onclick="processReq('${r.ID}', 'ACC')" class="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg shadow-sm text-xs font-black uppercase tracking-wider transition-colors"><i class="fa-solid fa-check mr-1"></i>ACC</button>
+          <button onclick="processReq('${r.ID}', 'TOLAK')" class="bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 px-3 py-1.5 rounded-lg shadow-sm text-xs font-black uppercase tracking-wider transition-colors"><i class="fa-solid fa-xmark mr-1"></i>Tolak</button>
+      </div>`;
+    }
+
+    thead += `<tr class="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+        <td class="p-4 text-[11px] font-black tracking-widest text-gray-400">${r.ID}</td>
+        <td class="p-4 font-black text-brandText">${r['Nama Karyawan']}</td>
+        <td class="p-4 text-xs"><span class="bg-gray-100 px-2.5 py-1 rounded-lg font-bold text-gray-600 border border-gray-200 shadow-sm">${r.Jenis}</span></td>
+        <td class="p-4 text-xs">${detail}</td>
+        <td class="p-4 text-xs text-gray-500 italic font-medium max-w-[200px] truncate" title="${r.Alasan}">"${r.Alasan}"</td>
+        <td class="p-4 text-center">
+            <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm ${bgStatus}">${r.Status}</span>
+            ${aksi}
+        </td>
     </tr>`;
   });
-
-  table.innerHTML = html + `</tbody>`;
+  thead += `</tbody>`;
+  table.innerHTML = thead;
 }
 
-async function processScheduleReq(id, newStatus) {
+async function processReq(id, action) {
   Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
-    await supabase.from('schedule_changes').update({ status: newStatus }).eq('id', id);
-    Swal.fire('Sukses', `Status pengajuan diperbarui menjadi ${newStatus}`, 'success');
-    loadAllData();
+    let newStatus = action === 'ACC' ? 'Disetujui' : 'Ditolak';
+    const { error } = await supabase
+      .from('perubahan_jadwal')
+      .update({ 'Status': newStatus })
+      .eq('ID', id);
+
+    if (error) throw error;
+    Swal.fire('Sukses', `Pengajuan berhasil diproses (${newStatus}).`, 'success');
+    loadData();
   } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire('Error', err.message || 'Gagal memproses tiket.', 'error');
   }
 }
 
 function renderLemburOwner() {
   const table = document.getElementById('table-lembur');
   if (!table) return;
-  let reqs = state.data.overtimes;
+  let reqs = state.data.Lembur || [];
+
+  reqs.sort((a, b) => {
+    if (a.Status === 'Pending' && b.Status !== 'Pending') return -1;
+    if (a.Status !== 'Pending' && b.Status === 'Pending') return 1;
+    return parseInt(b.ID.split('-')[1] || 0) - parseInt(a.ID.split('-')[1] || 0);
+  });
 
   if (reqs.length === 0) {
-    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500 font-bold" colspan="6">Tidak ada pengajuan lembur</td></tr>`;
+    table.innerHTML = `<tr><td class="p-4 text-center text-gray-500 font-bold" colspan="6">Tidak ada pengajuan lembur.</td></tr>`;
     return;
   }
 
-  let html = `<thead><tr class="bg-gray-50 border-b border-gray-100">
-    <th class="p-4 font-bold text-gray-600">ID</th>
-    <th class="p-4 font-bold text-gray-600">Karyawan</th>
-    <th class="p-4 font-bold text-gray-600">Tanggal</th>
-    <th class="p-4 font-bold text-gray-600">Durasi</th>
-    <th class="p-4 font-bold text-gray-600">Keterangan</th>
-    <th class="p-4 font-bold text-gray-600 text-center">Status & Aksi</th>
+  let thead = `<thead><tr class="bg-gray-50 border-b border-gray-100">
+      <th class="p-4 font-bold text-gray-600 whitespace-nowrap">ID TIKET</th>
+      <th class="p-4 font-bold text-gray-600">Karyawan</th>
+      <th class="p-4 font-bold text-gray-600">Tanggal</th>
+      <th class="p-4 font-bold text-gray-600">Durasi Jam</th>
+      <th class="p-4 font-bold text-gray-600">Keterangan</th>
+      <th class="p-4 font-bold text-gray-600 text-center">Status & Aksi</th>
   </tr></thead><tbody>`;
 
   reqs.forEach(r => {
-    let bgStatus = r.status === 'Disetujui' ? 'bg-emerald-100 text-emerald-700' : r.status.includes('Tolak') ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700';
-    let aksi = r.status === 'Pending' ? `
-      <div class="mt-2 flex justify-center gap-2">
-        <button onclick="processOvertimeReq('${r.id}', 'Disetujui')" class="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-xs font-bold border border-emerald-200"><i class="fa-solid fa-check mr-1"></i>ACC</button>
-        <button onclick="processOvertimeReq('${r.id}', 'Ditolak')" class="bg-rose-50 text-rose-700 px-3 py-1 rounded-lg text-xs font-bold border border-rose-200"><i class="fa-solid fa-xmark mr-1"></i>Tolak</button>
-      </div>` : '';
+    let aksi = '';
+    let bgStatus = r.Status === 'Disetujui' ? 'bg-emerald-100 text-emerald-700' : (r.Status.includes('Tolak') || r.Status.includes('Batal') ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700');
 
-    html += `<tr class="border-b border-gray-50 hover:bg-gray-50/50">
-      <td class="p-4 font-mono text-xs">${r.id}</td>
-      <td class="p-4 font-bold">${r.nama_karyawan}</td>
-      <td class="p-4">${r.tanggal}</td>
-      <td class="p-4 font-bold text-brandPink">${r.durasi_jam} Jam</td>
-      <td class="p-4 text-xs text-gray-500 italic">"${r.keterangan}"</td>
-      <td class="p-4 text-center"><span class="px-3 py-1 rounded-full text-[10px] font-black uppercase ${bgStatus}">${r.status}</span>${aksi}</td>
+    if (r.Status === 'Pending') {
+      aksi = `<div class="mt-2.5 flex justify-center gap-2">
+          <button onclick="processLemburReq('${r.ID}', 'ACC')" class="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg shadow-sm text-xs font-black uppercase tracking-wider transition-colors"><i class="fa-solid fa-check mr-1"></i>ACC</button>
+          <button onclick="processLemburReq('${r.ID}', 'TOLAK')" class="bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 px-3 py-1.5 rounded-lg shadow-sm text-xs font-black uppercase tracking-wider transition-colors"><i class="fa-solid fa-xmark mr-1"></i>Tolak</button>
+      </div>`;
+    }
+
+    thead += `<tr class="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+        <td class="p-4 text-[11px] font-black tracking-widest text-gray-400">${r.ID}</td>
+        <td class="p-4 font-black text-brandText">${r['Nama Karyawan']}</td>
+        <td class="p-4 font-black text-brandText">${r.Tanggal}</td>
+        <td class="p-4 text-xs font-bold text-brandPink">${r['Durasi Jam']} Jam</td>
+        <td class="p-4 text-xs text-gray-500 italic font-medium max-w-[200px] truncate" title="${r.Keterangan}">"${r.Keterangan}"</td>
+        <td class="p-4 text-center">
+            <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm ${bgStatus}">${r.Status}</span>
+            ${aksi}
+        </td>
     </tr>`;
   });
-
-  table.innerHTML = html + `</tbody>`;
+  thead += `</tbody>`;
+  table.innerHTML = thead;
 }
 
-async function processOvertimeReq(id, newStatus) {
+async function processLemburReq(id, action) {
   Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
-    await supabase.from('overtimes').update({ status: newStatus }).eq('id', id);
-    Swal.fire('Sukses', `Lembur berhasil di-${newStatus}`, 'success');
-    loadAllData();
+    let newStatus = action === 'ACC' ? 'Disetujui' : 'Ditolak';
+    const { error } = await supabase
+      .from('lemburs')
+      .update({ 'Status': newStatus })
+      .eq('ID', id);
+
+    if (error) throw error;
+    Swal.fire('Sukses', `Pengajuan lembur berhasil diproses (${newStatus}).`, 'success');
+    loadData();
   } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire('Error', err.message || 'Gagal memproses lembur.', 'error');
   }
 }
 
 function renderEmployeeDashboard() {
+  if (!state.data.Employee || !state.data.Attendance || !state.data.Shift) return;
   const me = state.auth.name;
-  const myProfile = state.data.employees.find(e => e.nama === me) || {};
-  const gajiPokok = parseFloat(myProfile.gaji_pokok || 0);
-  const tunjanganDatabase = parseFloat(myProfile.tunjangan_kehadiran || 0);
-  const utangHari = parseInt(myProfile.utang_hari || 0);
+  const myProfile = state.data.Employee.find(e => e.Nama === me) || {};
+  const gajiPokok = parseFloat(myProfile['Gaji Pokok'] || 0);
+  const tunjanganDatabase = parseFloat(myProfile['Tunjangan Kehadiran'] || 0);
+  const utangHari = parseInt(myProfile['Utang Hari'] || 0);
+
+  const upahHarian = gajiPokok / 25;
+  const dendaTelat = gajiPokok / 50;
+  const tarifLembur = gajiPokok / 250;
 
   const utangBadge = document.getElementById('empUtangHariBadge');
   if (utangBadge) {
@@ -814,24 +988,29 @@ function renderEmployeeDashboard() {
 
   const d = new Date();
   const currentMonthStr = `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-  const todayStr = formatDateToDDMMYYYY(new Date());
-  let myAtt = state.data.attendances.filter(a => a.nama_karyawan === me && a.tanggal && a.tanggal.includes(currentMonthStr));
+  let myAtt = state.data.Attendance.filter(a => a['Nama Karyawan'] === me && a.Tanggal && a.Tanggal.includes(currentMonthStr));
 
-  let countTelat = 0, countAlfa = 0, countSakitOpsiA = 0;
+  let countTelatKelalaian = 0;
+  let countAlfa = 0;
+  let countSakitOpsiA = 0;
+  const todayStr = formatDateToDDMMYYYY(new Date());
   let todayAtt = null;
 
   myAtt.forEach(a => {
-    if (a.tanggal === todayStr) todayAtt = a;
-    let jamPulang = a.jam_pulang ? a.jam_pulang.trim() : '';
-    let isLupaPulang = (jamPulang === '');
-    let status = a.status_kehadiran || 'Hadir';
-    let subStatus = a.sub_status || '';
+    if (a.Tanggal === todayStr) {
+      todayAtt = a;
+    }
 
-    if (status === 'Alfa' || (isLupaPulang && a.tanggal !== todayStr)) {
+    let jamPulang = a['Jam Pulang'] ? a['Jam Pulang'].trim() : '';
+    let isLupaPulang = (jamPulang === '');
+    let status = a['Status Kehadiran'] || 'Hadir';
+    let subStatus = a['Sub-Status'] || '';
+
+    if (status === 'Alfa' || (isLupaPulang && a.Tanggal !== todayStr)) {
       countAlfa++;
     } else if (status === 'Telat') {
       if (subStatus.includes('Auto Alfa') || subStatus.includes('> 30m')) countAlfa++;
-      else if (!subStatus.includes('Musibah')) countTelat++;
+      else if (!subStatus.includes('Musibah')) countTelatKelalaian++;
     } else if (status === 'Sakit') {
       if (subStatus.includes('Opsi A')) countSakitOpsiA++;
     }
@@ -852,7 +1031,7 @@ function renderEmployeeDashboard() {
       lblPulang.classList.add('hidden');
       if (radioMasuk) radioMasuk.checked = true;
     } else {
-      let jamPulang = todayAtt.jam_pulang ? todayAtt.jam_pulang.trim() : '';
+      let jamPulang = todayAtt['Jam Pulang'] ? todayAtt['Jam Pulang'].trim() : '';
       if (jamPulang === '') {
         formWrapper.classList.remove('hidden');
         completedState.classList.add('hidden');
@@ -867,39 +1046,44 @@ function renderEmployeeDashboard() {
   }
 
   let totalPotonganLain = 0;
-  state.data.deductions.filter(p => p.nama_karyawan === me && p.tanggal && p.tanggal.includes(currentMonthStr)).forEach(p => {
-    totalPotonganLain += parseFloat(p.nominal || 0);
-  });
+  if (state.data.Potongan) {
+    let myPotongan = state.data.Potongan.filter(p => p['Nama Karyawan'] === me && p.Tanggal && p.Tanggal.includes(currentMonthStr));
+    myPotongan.forEach(p => { totalPotonganLain += parseFloat(p.Nominal || 0); });
+  }
 
   let totalJamLembur = 0;
-  state.data.overtimes.filter(l => l.nama_karyawan === me && l.tanggal && l.tanggal.includes(currentMonthStr) && l.status === 'Disetujui').forEach(l => {
-    totalJamLembur += parseFloat(l.durasi_jam || 0);
-  });
-  let bonusLembur = totalJamLembur * (gajiPokok / 250);
+  if (state.data.Lembur) {
+    let myLembur = state.data.Lembur.filter(l => l['Nama Karyawan'] === me && l.Tanggal && l.Tanggal.includes(currentMonthStr) && l.Status === 'Disetujui');
+    myLembur.forEach(l => { totalJamLembur += parseFloat(l['Durasi Jam'] || 0); });
+  }
+  let bonusLembur = totalJamLembur * tarifLembur;
 
   const isTunjanganHangus = (countAlfa > 0 || countSakitOpsiA > 0);
   const tunjanganCair = isTunjanganHangus ? 0 : tunjanganDatabase;
   const gajiKotor = gajiPokok + tunjanganCair + bonusLembur;
 
-  let potTelatSOP = countTelat * (gajiPokok / 50);
-  let potAlfaSOP = countAlfa * (gajiPokok / 25);
+  let potTelatSOP = countTelatKelalaian * dendaTelat;
+  let potAlfaSOP = countAlfa * upahHarian;
   let totalSanksiSOP = potTelatSOP + potAlfaSOP;
 
-  if (totalSanksiSOP > (gajiKotor / 2)) totalSanksiSOP = gajiKotor / 2;
-  let totalPotongan = totalSanksiSOP + totalPotonganLain;
-  let estGaji = gajiKotor - totalPotongan;
+  if (totalSanksiSOP > (gajiKotor / 2)) {
+    totalSanksiSOP = gajiKotor / 2;
+  }
+
+  let totalPotonganKeseluruhan = totalSanksiSOP + totalPotonganLain;
+  let estGaji = gajiKotor - totalPotonganKeseluruhan;
 
   document.getElementById('empRealtimeSalary').innerText = 'Rp ' + estGaji.toLocaleString('id-ID');
-  document.getElementById('empCurrentDeduction').innerText = 'Rp ' + totalPotongan.toLocaleString('id-ID');
+  document.getElementById('empCurrentDeduction').innerText = 'Rp ' + totalPotonganKeseluruhan.toLocaleString('id-ID');
 
   let todayCode = getShiftForEmp(myProfile, todayStr);
   let shiftText = todayCode === 'P' ? '🌅 Pagi' : todayCode === 'S' ? '🌇 Siang' : '🏖️ Libur';
   let shiftColor = todayCode === 'P' ? 'text-emerald-500' : todayCode === 'S' ? 'text-amber-500' : 'text-rose-500';
   document.getElementById('empTodayShift').innerHTML = `<span class="${shiftColor}">${shiftText}</span>`;
 
+  renderPengajuanEmployee();
   renderJadwalKaryawan(myProfile);
   renderRiwayatAbsensi(myAtt);
-  renderPengajuanEmployee();
 }
 
 function renderJadwalKaryawan(empProfile) {
@@ -923,7 +1107,6 @@ function renderJadwalKaryawan(empProfile) {
     let iconCode = code === 'P' ? 'fa-sun text-emerald-500' :
                    code === 'S' ? 'fa-cloud-sun text-amber-500' :
                    'fa-mug-hot text-rose-500';
-
     let textStatus = code === 'P' ? 'PAGI (08:00 - 18:00)' :
                      code === 'S' ? 'SIANG (12:00 - 22:00)' :
                      'Libur / Off';
@@ -948,18 +1131,18 @@ function renderJadwalKaryawan(empProfile) {
 }
 
 function showAttDetailModal(attId) {
-  const att = state.data.attendances.find(x => x.id === attId);
+  const att = state.data.Attendance.find(x => x.ID === attId);
   if (!att) return;
 
-  document.getElementById('attDetailDate').innerText = att.tanggal;
-  document.getElementById('attDetailIn').innerText = att.jam_masuk || '--:--';
+  document.getElementById('attDetailDate').innerText = att.Tanggal;
+  document.getElementById('attDetailIn').innerText = att['Jam Masuk'] || '--:--';
 
-  let jamPulang = att.jam_pulang ? att.jam_pulang.trim() : '';
+  let jamPulang = att['Jam Pulang'] ? att['Jam Pulang'].trim() : '';
   document.getElementById('attDetailOut').innerText = jamPulang || '--:--';
 
   const todayStr = formatDateToDDMMYYYY(new Date());
-  let finalStatus = att.status_kehadiran || 'Hadir';
-  if (jamPulang === '' && att.tanggal !== todayStr) {
+  let finalStatus = att['Status Kehadiran'] || 'Hadir';
+  if (jamPulang === '' && att.Tanggal !== todayStr) {
     finalStatus = 'Auto-Alfa (Lupa Pulang)';
   }
 
@@ -975,11 +1158,11 @@ function showAttDetailModal(attId) {
   }
 
   const photoImg = document.getElementById('attDetailPhoto');
-  photoImg.src = att.foto_absensi || '';
+  photoImg.src = att['Foto Absensi'] || '';
 
   const mapsBtn = document.getElementById('attDetailMapsBtn');
-  if (att.lokasi_maps) {
-    mapsBtn.href = att.lokasi_maps;
+  if (att['Lokasi Maps']) {
+    mapsBtn.href = att['Lokasi Maps'];
     mapsBtn.classList.remove('hidden');
   } else {
     mapsBtn.classList.add('hidden');
@@ -997,32 +1180,36 @@ function renderRiwayatAbsensi(myAtt) {
     return;
   }
 
-  let sortedAtt = [...myAtt].slice(0, 5);
+  let sortedAtt = [...myAtt].sort((a, b) => {
+    let pa = a.Tanggal.split('/'); let pb = b.Tanggal.split('/');
+    return new Date(pb[2], pb[1] - 1, pb[0]) - new Date(pa[2], pa[1] - 1, pa[0]);
+  }).slice(0, 5);
+
   let html = '';
   const todayStr = formatDateToDDMMYYYY(new Date());
 
   sortedAtt.forEach(a => {
-    let status = a.status_kehadiran || 'Hadir';
-    let jamPulang = a.jam_pulang ? a.jam_pulang.trim() : '';
+    let status = a['Status Kehadiran'] || 'Hadir';
+    let jamPulang = a['Jam Pulang'] ? a['Jam Pulang'].trim() : '';
     let isLupaPulang = (jamPulang === '');
 
-    if (isLupaPulang && a.tanggal !== todayStr) {
+    if (isLupaPulang && a.Tanggal !== todayStr) {
       status = 'Auto-Alfa';
     }
 
     let statusColor = status === 'Telat' ? 'text-amber-600 bg-amber-50 border-amber-200' :
                       (status.includes('Alfa') ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200');
-    let inTime = a.jam_masuk || '--:--';
+    let inTime = a['Jam Masuk'] || '--:--';
     let outTime = jamPulang || '--:--';
 
     html += `
-    <div onclick="showAttDetailModal('${a.id}')" class="bg-white rounded-2xl p-3.5 shadow-sm border border-gray-100 mb-2.5 flex justify-between items-center hover:bg-gray-50 transition-all cursor-pointer group">
+    <div onclick="showAttDetailModal('${a.ID}')" class="bg-white rounded-2xl p-3.5 shadow-sm border border-gray-100 mb-2.5 flex justify-between items-center hover:bg-gray-50 transition-all cursor-pointer group">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-full bg-brandPink/10 text-brandPink flex items-center justify-center text-xs shadow-inner">
           <i class="fa-solid fa-camera"></i>
         </div>
         <div>
-          <p class="text-xs font-bold text-brandText mb-1">${a.tanggal}</p>
+          <p class="text-xs font-bold text-brandText mb-1">${a.Tanggal}</p>
           <p class="text-[10px] text-gray-500 font-medium">
             <span class="mr-2"><i class="fa-solid fa-arrow-right-to-bracket text-emerald-400"></i> ${inTime}</span>
             <span><i class="fa-solid fa-arrow-right-from-bracket text-rose-400"></i> ${outTime}</span>
@@ -1088,7 +1275,7 @@ function checkCurrentShift() {
 
   const d = new Date(dateInput);
   const dateStr = formatDateToDDMMYYYY(d);
-  const myProfile = state.data.employees.find(e => e.nama === state.auth.name) || {};
+  const myProfile = state.data.Employee.find(e => e.Nama === state.auth.name) || {};
   const currentCode = getShiftForEmp(myProfile, dateStr);
 
   let textCode = currentCode === 'P' ? 'PAGI (08:00 - 18:00)' : (currentCode === 'S' ? 'SIANG (12:00 - 22:00)' : 'LIBUR / OFF');
@@ -1098,8 +1285,11 @@ function checkCurrentShift() {
     infoEl.classList.remove('hidden');
   }
 
-  if (currentCode === 'P') targetSelect.value = 'S';
-  else if (currentCode === 'S') targetSelect.value = 'P';
+  if (currentCode === 'P') {
+    targetSelect.value = 'S';
+  } else if (currentCode === 'S') {
+    targetSelect.value = 'P';
+  }
 }
 
 async function handlePengajuanJadwal(e) {
@@ -1118,40 +1308,63 @@ async function handlePengajuanJadwal(e) {
       let durasi = document.getElementById('formReqDurasi').value;
       if (!durasi) { Swal.fire('Oops', 'Isi durasi jam lembur!', 'warning'); return; }
 
-      await supabase.from('overtimes').insert([{
-        tanggal: formatDateToDDMMYYYY(new Date(tgl1)),
-        nama_karyawan: state.auth.name,
-        durasi_jam: parseFloat(durasi),
-        keterangan: alasan,
-        status: 'Pending'
-      }]);
+      const newId = generateSeqID('LMB', state.data.Lembur);
+      const payload = {
+        'ID': newId,
+        'Tanggal': formatDateToDDMMYYYY(new Date(tgl1)),
+        'Nama Karyawan': state.auth.name,
+        'Durasi Jam': parseFloat(durasi),
+        'Keterangan': alasan,
+        'Status': 'Pending'
+      };
 
-      Swal.fire('Sukses', 'Pengajuan lembur berhasil dikirim!', 'success');
+      const { error } = await supabase.from('lemburs').insert([payload]);
+      if (error) throw error;
+
+      Swal.fire('Sukses', 'Pengajuan lembur berhasil dikirim.', 'success');
       e.target.reset();
       loadEmployeeData();
       return;
     }
 
-    if (jenis === 'Tukar Hari Libur' && !tgl2) { Swal.fire('Oops', 'Isi tukar ke tanggal!', 'warning'); return; }
+    if (jenis === 'Tukar Hari Libur' && !tgl2) {
+      Swal.fire('Oops', 'Isi tukar ke tanggal tujuan!', 'warning');
+      return;
+    }
 
     let shiftTujuan = jenis === 'Tukar Hari Libur' ? 'L' : document.getElementById('formReqShiftTujuan').value;
 
-    await supabase.from('schedule_changes').insert([{
-      nama_karyawan: state.auth.name,
-      jenis: jenis,
-      tgl_1: formatDateToDDMMYYYY(new Date(tgl1)),
-      tgl_2: tgl2 ? formatDateToDDMMYYYY(new Date(tgl2)) : null,
-      shift_tujuan: shiftTujuan,
-      alasan: alasan,
-      status: 'Pending'
-    }]);
+    if (jenis === 'Tukar Waktu Shift') {
+      const dateStr = formatDateToDDMMYYYY(new Date(tgl1));
+      const myProfile = state.data.Employee.find(x => x.Nama === state.auth.name) || {};
+      const currentCode = getShiftForEmp(myProfile, dateStr);
+      if (currentCode === shiftTujuan) {
+        Swal.fire('Ditolak Sistem', 'Tujuan tukar shift tidak boleh sama dengan jadwal Anda saat ini!', 'warning');
+        return;
+      }
+    }
 
-    Swal.fire('Sukses', 'Pengajuan jadwal berhasil dikirim!', 'success');
+    const newId = generateSeqID('REQ', state.data.PerubahanJadwal);
+    const payload = {
+      'ID': newId,
+      'Nama Karyawan': state.auth.name,
+      'Jenis': jenis,
+      'Tgl 1': formatDateToDDMMYYYY(new Date(tgl1)),
+      'Tgl 2': tgl2 ? formatDateToDDMMYYYY(new Date(tgl2)) : '',
+      'Shift Tujuan': shiftTujuan,
+      'Alasan': alasan,
+      'Status': 'Pending'
+    };
+
+    const { error } = await supabase.from('perubahan_jadwal').insert([payload]);
+    if (error) throw error;
+
+    Swal.fire('Sukses', 'Pengajuan perubahan jadwal berhasil dikirim.', 'success');
     e.target.reset();
     document.getElementById('currentShiftInfo').classList.add('hidden');
     loadEmployeeData();
   } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire('Error', err.message || 'Gagal menyimpan pengajuan.', 'error');
   }
 }
 
@@ -1161,15 +1374,13 @@ function renderPengajuanEmployee() {
   const me = state.auth.name;
 
   let myReq = [];
-  myReq = myReq.concat(state.data.schedule_changes.filter(c => c.nama_karyawan === me));
-  myReq = myReq.concat(state.data.overtimes.filter(c => c.nama_karyawan === me).map(l => ({
-    id: l.id,
-    status: l.status,
-    jenis: 'Lembur',
-    tgl_1: l.tanggal,
-    durasi_jam: l.durasi_jam,
-    alasan: l.keterangan
-  })));
+  if (state.data.PerubahanJadwal) myReq = myReq.concat(state.data.PerubahanJadwal.filter(c => c['Nama Karyawan'] === me));
+  if (state.data.Lembur) {
+    let myLembur = state.data.Lembur.filter(c => c['Nama Karyawan'] === me).map(l => ({
+      ID: l.ID, Status: l.Status, Jenis: 'Lembur', 'Tgl 1': l.Tanggal, 'Durasi Jam': l['Durasi Jam'], Alasan: l.Keterangan
+    }));
+    myReq = myReq.concat(myLembur);
+  }
 
   checkNotifications(myReq);
 
@@ -1178,411 +1389,86 @@ function renderPengajuanEmployee() {
     return;
   }
 
+  myReq.sort((a, b) => {
+    let numA = parseInt(a.ID.split('-')[1] || 0);
+    let numB = parseInt(b.ID.split('-')[1] || 0);
+    return numB - numA;
+  });
+
   let html = '';
   myReq.forEach(c => {
     let bg = 'bg-gray-50 text-gray-600 border-gray-100';
-    if (c.status === 'Pending' || c.status === 'Minta Batal') bg = 'bg-amber-50 text-amber-700 border-amber-200';
-    else if (c.status === 'Disetujui') bg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    else if (c.status === 'Ditolak' || c.status === 'Dibatalkan') bg = 'bg-rose-50 text-rose-700 border-rose-200';
+    if (c.Status === 'Pending' || c.Status === 'Minta Batal') bg = 'bg-amber-50 text-amber-700 border-amber-200';
+    else if (c.Status === 'Disetujui') bg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    else if (c.Status === 'Ditolak' || c.Status === 'Dibatalkan') bg = 'bg-rose-50 text-rose-700 border-rose-200';
 
-    let detailStr = "";
-    if (c.jenis === 'Tukar Hari Libur') {
-      detailStr = `Tukar Libur <span class="font-bold text-brandText">${c.tgl_1}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> <span class="font-bold text-brandText">${c.tgl_2}</span>`;
-    } else if (c.jenis === 'Tukar Waktu Shift') {
-      let targetShiftText = c.shift_tujuan === 'P' ? 'PAGI' : (c.shift_tujuan === 'S' ? 'SIANG' : c.shift_tujuan);
-      detailStr = `Tukar Shift tgl <span class="font-bold text-brandText">${c.tgl_1}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Ke <span class="font-bold text-brandText">${targetShiftText}</span>`;
-    } else if (c.jenis === 'Lembur') {
-      detailStr = `Lembur <span class="font-bold text-brandText">${c.tgl_1}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Durasi: <span class="font-bold text-brandText">${c.durasi_jam} Jam</span>`;
+    let detailStr = '';
+    if (c.Jenis === 'Tukar Hari Libur') {
+      detailStr = `Tukar Libur <span class="font-bold text-brandText">${c['Tgl 1']}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> <span class="font-bold text-brandText">${c['Tgl 2']}</span>`;
+    } else if (c.Jenis === 'Tukar Waktu Shift') {
+      let targetShiftText = c['Shift Tujuan'] === 'P' ? 'PAGI' : (c['Shift Tujuan'] === 'S' ? 'SIANG' : c['Shift Tujuan']);
+      detailStr = `Tukar Shift tgl <span class="font-bold text-brandText">${c['Tgl 1']}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Ke <span class="font-bold text-brandText">${targetShiftText}</span>`;
+    } else if (c.Jenis === 'Lembur') {
+      detailStr = `Lembur <span class="font-bold text-brandText">${c['Tgl 1']}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Durasi: <span class="font-bold text-brandText">${c['Durasi Jam']} Jam</span>`;
     }
 
-    html += `<div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-50 mb-3"><div class="flex justify-between items-start mb-2"><span class="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${bg}">${c.status}</span><span class="text-[10px] font-bold text-gray-400 bg-gray-100 px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm">${c.jenis}</span></div><p class="text-xs text-gray-500 mb-1">${detailStr}</p><p class="text-[11px] text-gray-400 italic font-medium leading-relaxed">"${c.alasan}"</p></div>`;
+    html += `<div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-50 mb-3"><div class="flex justify-between items-start mb-2"><span class="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${bg}">${c.Status}</span><span class="text-[10px] font-bold text-gray-400 bg-gray-100 px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm">${c.Jenis}</span></div><p class="text-xs text-gray-500 mb-1">${detailStr}</p><p class="text-[11px] text-gray-400 italic font-medium leading-relaxed">"${c.Alasan}"</p></div>`;
   });
   el.innerHTML = html;
 }
 
-function checkNotifications(myReq) {
-  const notifBadge = document.getElementById('notifBadge');
-  const notifListEl = document.getElementById('notifList');
-  if (!notifBadge || !notifListEl) return;
+function renderNav() {
+  const nav = document.getElementById('navMenu');
+  if (!nav) return;
+  nav.innerHTML = menuItems.map(item => `
+    <a href="#" onclick="switchView('${item.id}')" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${state.view === item.id ? 'bg-brandPink text-white shadow-md font-bold' : 'text-gray-600 hover:bg-brandPink/10 hover:text-brandPink'}">
+      <i class="fa-solid ${item.icon} w-5 text-center"></i><span class="text-sm">${item.label}</span>
+    </a>
+  `).join('');
+}
 
-  const processedReq = myReq.filter(r => r.status !== 'Pending' && r.status !== 'Minta Batal');
-  const cacheKey = 'ara_notif_read_' + state.auth.name;
-  const lastReadState = JSON.parse(localStorage.getItem(cacheKey)) || [];
-
-  let unreadCount = 0;
-  let html = '';
-
-  if (processedReq.length === 0) {
-    html = `<div class="text-center text-xs text-gray-400 py-10 bg-gray-50 rounded-2xl border border-gray-50">Belum ada notifikasi baru untuk Anda.</div>`;
+function toggleSalaryVisibility() {
+  const salaryEl = document.getElementById('empRealtimeSalary');
+  const dedEl = document.getElementById('empCurrentDeduction');
+  const icon = document.getElementById('eyeIconSalary');
+  salaryEl.classList.toggle('unblurred');
+  dedEl.classList.toggle('unblurred');
+  if (salaryEl.classList.contains('unblurred')) {
+    icon.classList.replace('fa-eye-slash', 'fa-eye');
   } else {
-    processedReq.forEach(req => {
-      const isRead = lastReadState.some(saved => saved.id === req.id && saved.status === req.status);
-      if (!isRead) unreadCount++;
-
-      let iconColor = req.status === 'Disetujui' ? 'text-emerald-500 bg-emerald-50' : 'text-rose-500 bg-rose-50';
-      let iconSign = req.status === 'Disetujui' ? 'fa-circle-check' : 'fa-circle-xmark';
-      let dotUnread = !isRead ? `<div class="w-2 h-2 rounded-full bg-red-500 shadow-sm shrink-0"></div>` : '';
-
-      let msg = '';
-      if (req.jenis === 'Tukar Waktu Shift') {
-        let targetText = req.shift_tujuan === 'P' ? 'PAGI' : (req.shift_tujuan === 'S' ? 'SIANG' : req.shift_tujuan);
-        msg = `Pengajuan Tukar Waktu Shift Anda pada tgl <b>${req.tgl_1}</b> (ke <b>${targetText}</b>) telah <span class="font-bold ${req.status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.status}</span> oleh Owner.`;
-      } else if (req.jenis === 'Tukar Hari Libur') {
-        msg = `Pengajuan Tukar Libur Anda pada tgl <b>${req.tgl_1}</b> telah <span class="font-bold ${req.status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.status}</span> oleh Owner.`;
-      } else if (req.jenis === 'Lembur') {
-        msg = `Pengajuan Lembur Anda pada tgl <b>${req.tgl_1}</b> (Durasi: <b>${req.durasi_jam} Jam</b>) telah <span class="font-bold ${req.status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.status}</span> oleh Owner.`;
-      }
-
-      html += `
-      <div class="flex items-start gap-3 p-3.5 rounded-2xl border ${isRead ? 'bg-white border-gray-100 hover:bg-gray-50' : 'bg-brandPink/5 border-brandPink/20 shadow-sm'} transition-colors mb-2">
-        <div class="w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${iconColor} shadow-inner text-lg"><i class="fa-solid ${iconSign}"></i></div>
-        <div class="flex-1 text-[11px] text-gray-600 leading-relaxed">${msg}</div>
-        ${dotUnread}
-      </div>`;
-    });
-  }
-
-  notifListEl.innerHTML = html;
-  if (unreadCount > 0) notifBadge.classList.remove('hidden');
-  else notifBadge.classList.add('hidden');
-
-  window.currentUnreadState = processedReq.map(r => ({ id: r.id, status: r.status }));
-}
-
-function showNotifModal() {
-  document.getElementById('notifBadge').classList.add('hidden');
-  if (window.currentUnreadState) {
-    const cacheKey = 'ara_notif_read_' + state.auth.name;
-    localStorage.setItem(cacheKey, JSON.stringify(window.currentUnreadState));
-  }
-  openModal('modal-emp-notif');
-}
-
-function submitAbsensi(e) {
-  e.preventDefault();
-  const namaUser = document.getElementById('empGreetingName').innerText.trim();
-  const jenisAbsen = document.querySelector('input[name="jenisAbsen"]:checked').value;
-  const photoData = document.getElementById('compressedPhotoData').value;
-
-  if (!photoData) {
-    Swal.fire('Oops', 'Wajib ambil foto bukti di lokasi kerja!', 'warning');
-    return;
-  }
-
-  const todayStr = formatDateToDDMMYYYY(new Date());
-  const myProfile = state.data.employees.find(x => x.nama === namaUser) || {};
-  const currentCode = getShiftForEmp(myProfile, todayStr);
-  const now = new Date();
-  let currentHour = now.getHours() + (now.getMinutes() / 60);
-
-  if (jenisAbsen === 'Masuk') {
-    let targetStartHour = currentCode === 'P' ? 8 : (currentCode === 'S' ? 12 : null);
-
-    if (targetStartHour !== null && currentHour < targetStartHour) {
-      let earlyHours = Math.round((targetStartHour - currentHour) * 10) / 10;
-      if (earlyHours > 0.75) {
-        Swal.fire({
-          title: '🌅 Terdeteksi Lembur Awal!',
-          html: `Jadwal masuk shift Anda adalah jam <b>${targetStartHour}:00</b>, namun Anda absen pada jam <b>${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</b> (Lebih awal <b>${earlyHours} Jam</b>).<br><br>Apakah Anda mendapat penugasan <b>Lembur Awal</b>?`,
-          icon: 'question',
-          showCancelButton: true,
-          confirmButtonColor: '#ff8fa3',
-          cancelButtonColor: '#9ca3af',
-          confirmButtonText: '<i class="fa-solid fa-business-time mr-1"></i> Ya, Ajukan Lembur',
-          cancelButtonText: 'Tidak, Hanya Rajin',
-          reverseButtons: true
-        }).then((result) => {
-          executeAbsensiProses(namaUser, jenisAbsen, photoData, result.isConfirmed, result.isConfirmed ? earlyHours : 0);
-        });
-        return;
-      }
-    }
-  } else if (jenisAbsen === 'Pulang') {
-    let targetEndHour = currentCode === 'P' ? 18 : (currentCode === 'S' ? 22 : null);
-
-    if (targetEndHour !== null) {
-      if (currentHour < 6) currentHour += 24;
-      if (currentHour > targetEndHour) {
-        let overtimeHours = Math.round((currentHour - targetEndHour) * 10) / 10;
-        if (overtimeHours >= 0.5) {
-          Swal.fire({
-            title: '⏰ Terdeteksi Jam Ekstra!',
-            html: `Jadwal pulang shift Anda adalah jam <b>${targetEndHour}:00</b>, namun Anda absen pada jam <b>${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</b> (Lebih <b>${overtimeHours} Jam</b>).<br><br>Apakah durasi tambahan ini diajukan sebagai <b>Lembur</b>?`,
-            icon: 'question',
-            showCancelButton: true,
-            confirmButtonColor: '#ff8fa3',
-            cancelButtonColor: '#9ca3af',
-            confirmButtonText: '<i class="fa-solid fa-business-time mr-1"></i> Ya, Ajukan Lembur',
-            cancelButtonText: 'Hanya Telat Pulang',
-            reverseButtons: true
-          }).then((result) => {
-            executeAbsensiProses(namaUser, jenisAbsen, photoData, result.isConfirmed, result.isConfirmed ? overtimeHours : 0);
-          });
-          return;
-        }
-      }
-    }
-  }
-
-  executeAbsensiProses(namaUser, jenisAbsen, photoData, false, 0);
-}
-
-function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, durasiLembur) {
-  const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-
-  if (!navigator.geolocation) {
-    Swal.fire('Error', 'Browser tidak mendukung deteksi lokasi.', 'error');
-    return;
-  }
-
-  Swal.fire({ title: `Memproses Absen ${jenisAbsen}...`, text: 'Mencari titik koordinat GPS & Validasi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-
-  navigator.geolocation.getCurrentPosition(
-    async (position) => {
-      const lat = position.coords.latitude;
-      const long = position.coords.longitude;
-      const accuracy = position.coords.accuracy;
-
-      if (accuracy > 70) {
-        Swal.fire('Sinyal GPS Tidak Akurat', `Akurasi terdeteksi ${Math.round(accuracy)}m. Pindah ke area terbuka untuk mencegah Fake GPS.`, 'warning');
-        return;
-      }
-
-      const latSalon = parseFloat(state.settings['Lat Salon'] || -8.583333);
-      const longSalon = parseFloat(state.settings['Long Salon'] || 115.283333);
-      const batasRadius = parseFloat(state.settings['Batas Radius'] || 50);
-      const jarak = calculateDistance(lat, long, latSalon, longSalon);
-
-      if (jarak > batasRadius) {
-        Swal.fire('Akses Ditolak (Di Luar Radius)', `Anda terdeteksi sejauh ${Math.round(jarak)}m dari Salon (Batas Maks: ${batasRadius}m).`, 'error');
-        return;
-      }
-
-      let photoUrl = '';
-      try {
-        const fileName = `absen_${namaUser.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
-        const base64Data = photoData.split(',')[1];
-        const byteCharacters = atob(base64Data);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: 'image/jpeg' });
-
-        const { error: uploadErr } = await supabase.storage.from('attendance_photos').upload(fileName, blob, { contentType: 'image/jpeg' });
-        if (uploadErr) throw uploadErr;
-
-        const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
-        photoUrl = publicUrlData.publicUrl;
-      } catch (photoErr) {
-        console.warn("Storage upload fallback:", photoErr.message);
-        photoUrl = photoData;
-      }
-
-      const todayStr = formatDateToDDMMYYYY(new Date());
-      const mapsUrl = `https://www.google.com/maps?q=${lat},${long}`;
-
-      try {
-        const { data: existing } = await supabase
-          .from('attendances')
-          .select('*')
-          .eq('tanggal', todayStr)
-          .eq('nama_karyawan', namaUser);
-
-        if (existing && existing.length > 0) {
-          await supabase.from('attendances').update({ jam_pulang: timeNow, foto_absensi: photoUrl }).eq('id', existing[0].id);
-        } else {
-          await supabase.from('attendances').insert([{
-            tanggal: todayStr,
-            nama_karyawan: namaUser,
-            jam_masuk: timeNow,
-            jam_pulang: '',
-            status_kehadiran: 'Hadir',
-            lokasi_maps: mapsUrl,
-            foto_absensi: photoUrl
-          }]);
-        }
-
-        let successMsg = `Absen ${jenisAbsen} berhasil dicatat! (Jarak: ${Math.round(jarak)}m)`;
-
-        if (triggerLembur) {
-          Swal.fire({
-            title: 'Absen Sukses!',
-            text: successMsg + '\n\nSistem mengarahkan Anda ke Form Pengajuan Lembur...',
-            icon: 'success',
-            timer: 2500,
-            showConfirmButton: false
-          }).then(() => {
-            switchEmpView('pengajuan');
-            document.getElementById('formReqJenis').value = 'Lembur';
-            onChangeJenisPengajuan();
-            document.getElementById('formReqTgl1').value = formatDateToYYYYMMDD(new Date());
-            document.getElementById('formReqDurasi').value = durasiLembur;
-            document.getElementById('formReqAlasan').focus();
-          });
-        } else {
-          Swal.fire('Sukses', successMsg, 'success');
-        }
-
-        loadEmployeeData();
-        document.getElementById('absensiForm').reset();
-        document.getElementById('photoPreview').classList.add('hidden');
-        document.getElementById('photoPlaceholder').classList.remove('hidden');
-        document.getElementById('compressedPhotoData').value = '';
-      } catch (dbErr) {
-        Swal.fire('Database Error', dbErr.message, 'error');
-      }
-    },
-    (error) => {
-      Swal.fire('Akses Lokasi Ditolak', 'Aktifkan GPS browser untuk melakukan absensi.', 'error');
-    },
-    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-  );
-}
-
-function handlePhotoCapture(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    const img = new Image();
-    img.onload = function () {
-      const canvas = document.createElement('canvas');
-      const MAX_WIDTH = 800;
-      let width = img.width, height = img.height;
-      if (width > MAX_WIDTH) { height = Math.round((height * MAX_WIDTH) / width); width = MAX_WIDTH; }
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-      document.getElementById('compressedPhotoData').value = dataUrl;
-      const preview = document.getElementById('photoPreview');
-      preview.src = dataUrl;
-      preview.classList.remove('hidden');
-      document.getElementById('photoPlaceholder').classList.add('hidden');
-    };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
-}
-
-async function triggerGeneratePayroll() {
-  const period = document.getElementById('payrollPeriod').value;
-  if (!period) {
-    Swal.fire('Pilih Periode', 'Silakan pilih bulan dan tahun periode payroll.', 'warning');
-    return;
-  }
-  const formattedPeriod = `${period.split('-')[1]}/${period.split('-')[0]}`;
-
-  Swal.fire({ title: 'Mengkalkulasi Payroll Supabase...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-
-  try {
-    const emps = state.data.employees.filter(e => e.status === 'Aktif' && e.peran !== 'Owner');
-    const atts = state.data.attendances.filter(a => a.tanggal && a.tanggal.includes(formattedPeriod));
-    const pots = state.data.deductions.filter(p => p.tanggal && p.tanggal.includes(formattedPeriod));
-    const lmbs = state.data.overtimes.filter(l => l.tanggal && l.tanggal.includes(formattedPeriod) && l.status === 'Disetujui');
-
-    for (const emp of emps) {
-      const empName = emp.nama;
-      const gapok = parseFloat(emp.gaji_pokok || 0);
-      const tunjanganDb = parseFloat(emp.tunjangan_kehadiran || 0);
-
-      const upahHarian = gapok / 25;
-      const dendaTelat = gapok / 50;
-      const upahLembur = gapok / 250;
-
-      let countTelat = 0, countAlfa = 0, countSakitA = 0;
-      atts.filter(a => a.nama_karyawan === empName).forEach(a => {
-        let jamPulang = a.jam_pulang ? a.jam_pulang.trim() : '';
-        let status = a.status_kehadiran || 'Hadir';
-        let sub = a.sub_status || '';
-
-        if (status === 'Alfa' || jamPulang === '') countAlfa++;
-        else if (status === 'Telat') {
-          if (sub.includes('Auto Alfa') || sub.includes('> 30m')) countAlfa++;
-          else if (!sub.includes('Musibah')) countTelat++;
-        } else if (status === 'Sakit' && sub.includes('Opsi A')) {
-          countSakitA++;
-        }
-      });
-
-      let totalPotLain = 0;
-      pots.filter(p => p.nama_karyawan === empName).forEach(p => totalPotLain += parseFloat(p.nominal || 0));
-
-      let totalJamLmb = 0;
-      lmbs.filter(l => l.nama_karyawan === empName).forEach(l => totalJamLmb += parseFloat(l.durasi_jam || 0));
-      const uangLemburVal = Math.round(totalJamLmb * upahLembur);
-
-      const tunjanganCair = (countAlfa > 0 || countSakitA > 0) ? 0 : tunjanganDb;
-      const kotor = gapok + tunjanganCair + uangLemburVal;
-
-      let potTelat = countTelat * dendaTelat;
-      let potAlfa = countAlfa * upahHarian;
-      let sanksi = potTelat + potAlfa;
-
-      if (sanksi > (kotor / 2)) {
-        let scale = (kotor / 2) / sanksi;
-        potTelat = Math.round(potTelat * scale);
-        potAlfa = Math.round(potAlfa * scale);
-      }
-
-      const totalBersih = Math.round(kotor - potTelat - potAlfa - totalPotLain);
-
-      const payrollPayload = {
-        periode: formattedPeriod,
-        nama_karyawan: empName,
-        gaji_pokok: gapok,
-        tunjangan: tunjanganCair,
-        uang_lembur: uangLemburVal,
-        potongan_telat: Math.round(potTelat),
-        potongan_alfa: Math.round(potAlfa),
-        potongan_lain: Math.round(totalPotLain),
-        total_gaji_bersih: totalBersih
-      };
-
-      const { data: existing } = await supabase
-        .from('payrolls')
-        .select('id')
-        .eq('periode', formattedPeriod)
-        .eq('nama_karyawan', empName);
-
-      if (existing && existing.length > 0) {
-        await supabase.from('payrolls').update(payrollPayload).eq('id', existing[0].id);
-      } else {
-        await supabase.from('payrolls').insert([payrollPayload]);
-      }
-    }
-
-    Swal.fire('Selesai', `Slip gaji periode ${formattedPeriod} berhasil digenerate!`, 'success');
-    loadAllData();
-  } catch (err) {
-    Swal.fire('Error Payroll', err.message, 'error');
+    icon.classList.replace('fa-eye', 'fa-eye-slash');
   }
 }
 
 function renderEmpPayrollHistory() {
   const el = document.getElementById('empPayrollList');
   if (!el) return;
-  const myPayrolls = state.data.payrolls.filter(p => p.nama_karyawan === state.auth.name);
+  const myPayrolls = state.data.Payroll ? state.data.Payroll.filter(p => p['Nama Karyawan'] === state.auth.name) : [];
 
   if (myPayrolls.length === 0) {
-    el.innerHTML = `<div class="text-center text-xs text-gray-400 py-10 bg-gray-50 rounded-2xl border border-gray-100">Belum ada riwayat slip gaji.</div>`;
+    el.innerHTML = `<div class="text-center text-xs text-gray-400 py-10 bg-gray-50 rounded-2xl border border-gray-100 shadow-inner">Belum ada riwayat slip gaji yang diterbitkan oleh Owner.</div>`;
     return;
   }
+
+  myPayrolls.sort((a, b) => {
+    let pa = a.Periode.split('/'); let pb = b.Periode.split('/');
+    return new Date(pb[1], pb[0] - 1) - new Date(pa[1], pa[0] - 1);
+  });
 
   let html = '';
   myPayrolls.forEach(p => {
     html += `
-    <div class="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100 mb-3 hover:bg-gray-100 transition-colors cursor-pointer shadow-sm" onclick="showEmpSlipDetail('${p.id}')">
+    <div class="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100 mb-3 hover:bg-gray-100 transition-colors cursor-pointer shadow-sm hover:shadow-md" onclick="showEmpSlipDetail('${p.ID}')">
       <div class="flex items-center gap-4">
-        <div class="w-10 h-10 rounded-full bg-brandPink/10 text-brandPink flex items-center justify-center"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+        <div class="w-10 h-10 rounded-full bg-brandPink/10 text-brandPink flex items-center justify-center shadow-inner"><i class="fa-solid fa-file-invoice-dollar"></i></div>
         <div>
-          <p class="text-xs font-bold text-brandText mb-0.5">Periode ${p.periode}</p>
-          <p class="text-[10px] font-bold text-brandPink uppercase">Klik Buka Slip</p>
+          <p class="text-xs font-bold text-brandText mb-0.5">Periode ${p.Periode}</p>
+          <p class="text-[10px] font-bold text-brandPink uppercase tracking-wide">Klik Buka Slip</p>
         </div>
       </div>
       <div class="text-right">
-        <p class="text-[9px] text-gray-400 font-bold uppercase mb-0.5">Total Diterima</p>
-        <p class="text-sm font-black text-brandText">Rp ${Number(p.total_gaji_bersih).toLocaleString('id-ID')}</p>
+        <p class="text-[9px] text-gray-400 font-bold uppercase mb-0.5 tracking-widest">Total Diterima</p>
+        <p class="text-sm font-black text-brandText">Rp ${Number(p['Total Gaji Bersih']).toLocaleString('id-ID')}</p>
       </div>
     </div>`;
   });
@@ -1590,47 +1476,76 @@ function renderEmpPayrollHistory() {
 }
 
 function showEmpSlipDetail(id) {
-  const p = state.data.payrolls.find(x => x.id === id);
+  const p = state.data.Payroll.find(x => x.ID === id);
   if (!p) return;
 
-  document.getElementById('slip-periode').innerText = p.periode;
-  document.getElementById('slip-nama').innerText = p.nama_karyawan;
-  document.getElementById('slip-gapok').innerText = 'Rp ' + Number(p.gaji_pokok).toLocaleString('id-ID');
-  document.getElementById('slip-tunjangan').innerText = 'Rp ' + Number(p.tunjangan).toLocaleString('id-ID');
-  document.getElementById('slip-uang-lembur').innerText = '+ Rp ' + Number(p.uang_lembur || 0).toLocaleString('id-ID');
-  document.getElementById('slip-pot-telat').innerText = '- Rp ' + Number(p.potongan_telat).toLocaleString('id-ID');
-  document.getElementById('slip-pot-alfa').innerText = '- Rp ' + Number(p.potongan_alfa).toLocaleString('id-ID');
-  document.getElementById('slip-pot-lain').innerText = '- Rp ' + Number(p.potongan_lain || 0).toLocaleString('id-ID');
-  document.getElementById('slip-total').innerText = 'Rp ' + Number(p.total_gaji_bersih).toLocaleString('id-ID');
+  document.getElementById('slip-periode').innerText = p.Periode;
+  document.getElementById('slip-nama').innerText = p['Nama Karyawan'];
+  document.getElementById('slip-gapok').innerText = 'Rp ' + Number(p['Gaji Pokok']).toLocaleString('id-ID');
+  document.getElementById('slip-tunjangan').innerText = 'Rp ' + Number(p['Tunjangan']).toLocaleString('id-ID');
+  document.getElementById('slip-uang-lembur').innerText = '+ Rp ' + Number(p['Uang Lembur'] || 0).toLocaleString('id-ID');
+  document.getElementById('slip-pot-telat').innerText = '- Rp ' + Number(p['Potongan Telat']).toLocaleString('id-ID');
+  document.getElementById('slip-pot-alfa').innerText = '- Rp ' + Number(p['Potongan Alfa']).toLocaleString('id-ID');
+  let potLain = parseFloat(p['Potongan Lain'] || 0);
+  document.getElementById('slip-pot-lain').innerText = '- Rp ' + potLain.toLocaleString('id-ID');
+  document.getElementById('slip-total').innerText = 'Rp ' + Number(p['Total Gaji Bersih']).toLocaleString('id-ID');
 
   openModal('modal-emp-slip');
 }
 
-function downloadSlipPDF() {
-  const slipArea = document.getElementById('slip-print-area');
-  const nama = document.getElementById('slip-nama').innerText.replace(/\s+/g, '_');
-  const periode = document.getElementById('slip-periode').innerText.replace(/\//g, '-');
-  const opt = { margin: 0.2, filename: `Slip_${nama}_${periode}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' } };
-  html2pdf().set(opt).from(slipArea).save();
+function showEmpSlipDetailOwner(id) {
+  showEmpSlipDetail(id);
 }
 
-function exportPayrollExcel() {
-  if (state.data.payrolls.length === 0) {
-    Swal.fire('Info', 'Belum ada data Payroll di database.', 'info');
-    return;
+function switchEmpView(view) {
+  document.querySelectorAll('.emp-view-section').forEach(el => el.classList.remove('active'));
+  document.getElementById(`emp-view-${view}`).classList.add('active');
+  document.querySelectorAll('#app-employee nav button').forEach(b => b.className = 'flex flex-col items-center gap-1 text-gray-400 hover:text-brandPink transition-colors w-1/3');
+  document.getElementById(`empNav-${view}`).className = 'flex flex-col items-center gap-1 text-brandPink transition-colors w-1/3';
+}
+
+function openModal(id) { const m = document.getElementById(id); if (m) m.classList.remove('hidden'); }
+function closeModal(id) { const m = document.getElementById(id); if (m) m.classList.add('hidden'); }
+
+function openAddEmployeeModal() {
+  const form = document.getElementById('formEmployee');
+  form.reset();
+  form.elements['ID'].value = '';
+  openModal('modal-employee');
+}
+
+function editEmployee(id) {
+  const e = state.data.Employee.find(x => x.ID === id);
+  if (!e) return;
+  const form = document.getElementById('formEmployee');
+  form.elements['ID'].value = e.ID;
+  form.elements['Nama'].value = e.Nama;
+  form.elements['Gaji Pokok'].value = e['Gaji Pokok'];
+  form.elements['Tunjangan Kehadiran'].value = e['Tunjangan Kehadiran'];
+  form.elements['Utang Hari'].value = e['Utang Hari'] || '0';
+  form.elements['Status'].value = e.Status;
+  form.elements['Peran'].value = e.Peran || 'Karyawan';
+  form.elements['PIN'].value = e.PIN;
+
+  if (e['Tgl Masuk']) {
+    const p = e['Tgl Masuk'].split('/');
+    if (p.length === 3) form.elements['Tgl Masuk'].value = `${p[2]}-${p[1]}-${p[0]}`;
   }
-  const ws = XLSX.utils.json_to_sheet(state.data.payrolls);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Payroll_Rekap");
-  XLSX.writeFile(wb, `Payroll_AraBeauty_${Date.now()}.xlsx`);
+
+  ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'].forEach(day => {
+    form.elements[`Shift ${day}`].value = e[`Shift ${day}`] || 'L';
+  });
+
+  openModal('modal-employee');
 }
 
 function populateDropdowns() {
-  const emps = state.data.employees.filter(e => e.status === 'Aktif' && e.peran !== 'Owner');
+  const emps = state.data.Employee.filter(e => e.Status === 'Aktif' && e.Peran !== 'Owner');
   const attSelect = document.getElementById('attEmpSelect');
-  if (attSelect) attSelect.innerHTML = emps.map(e => `<option value="${e.nama}">${e.nama}</option>`).join('');
+  if (attSelect) attSelect.innerHTML = emps.map(e => `<option value="${e.Nama}">${e.Nama}</option>`).join('');
+
   const potSelect = document.getElementById('potEmpSelect');
-  if (potSelect) potSelect.innerHTML = emps.map(e => `<option value="${e.nama}">${e.nama}</option>`).join('');
+  if (potSelect) potSelect.innerHTML = emps.map(e => `<option value="${e.Nama}">${e.Nama}</option>`).join('');
 }
 
 function openModalPotongan() {
@@ -1644,93 +1559,78 @@ async function handlePotonganSubmit(e) {
   let tgl = document.getElementById('potTanggal').value;
   if (!tgl) return;
 
-  let payload = {
-    tanggal: formatDateToDDMMYYYY(new Date(tgl)),
-    nama_karyawan: document.getElementById('potEmpSelect').value,
-    jenis: document.getElementById('potJenis').value,
-    nominal: parseFloat(document.getElementById('potNominal').value || 0),
-    keterangan: document.getElementById('potKeterangan').value
+  const newId = generateSeqID('POT', state.data.Potongan);
+  const payload = {
+    'ID': newId,
+    'Tanggal': formatDateToDDMMYYYY(new Date(tgl)),
+    'Nama Karyawan': document.getElementById('potEmpSelect').value,
+    'Jenis': document.getElementById('potJenis').value,
+    'Nominal': parseFloat(document.getElementById('potNominal').value || 0),
+    'Keterangan': document.getElementById('potKeterangan').value
   };
 
   Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   try {
-    await supabase.from('deductions').insert([payload]);
-    Swal.fire('Sukses', 'Data potongan berhasil disimpan!', 'success');
+    const { error } = await supabase.from('potongans').insert([payload]);
+    if (error) throw error;
+    Swal.fire('Sukses', 'Potongan kasir/kasbon berhasil disimpan.', 'success');
     closeModal('modal-potongan');
-    loadAllData();
+    loadData();
   } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire('Error', err.message || 'Gagal menyimpan potongan.', 'error');
   }
 }
 
-async function handleEmployeeFormSubmit(e) {
+async function handleFormSubmit(e, sheetName) {
   e.preventDefault();
   const formData = new FormData(e.target);
   const data = Object.fromEntries(formData.entries());
 
-  if (data.tgl_masuk) data.tgl_masuk = formatDateToDDMMYYYY(new Date(data.tgl_masuk));
-  data.gaji_pokok = parseFloat(data.gaji_pokok || 0);
-  data.tunjangan_kehadiran = parseFloat(data.tunjangan_kehadiran || 0);
-  data.utang_hari = parseInt(data.utang_hari || 0);
-
-  const empId = data.id;
-  delete data.id;
-
-  Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-  try {
-    if (empId) {
-      await supabase.from('employees').update(data).eq('id', empId);
-    } else {
-      await supabase.from('employees').insert([data]);
+  if (sheetName === 'Attendance') {
+    if (data.Tanggal) data.Tanggal = formatDateToDDMMYYYY(new Date(data.Tanggal));
+    Swal.fire({ title: 'Menyimpan Absensi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    try {
+      let existing = (state.data.Attendance || []).find(a => a.Tanggal === data.Tanggal && a['Nama Karyawan'] === data['Nama Karyawan']);
+      if (existing) {
+        const { error } = await supabase
+          .from('attendances')
+          .update(data)
+          .eq('ID', existing.ID);
+        if (error) throw error;
+      } else {
+        data['ID'] = generateSeqID('ATT', state.data.Attendance);
+        const { error } = await supabase.from('attendances').insert([data]);
+        if (error) throw error;
+      }
+      Swal.fire('Sukses', 'Absensi berhasil disimpan!', 'success');
+      closeModal('modal-attendance');
+      loadData();
+    } catch (err) {
+      Swal.fire('Error', err.message || 'Gagal menyimpan absensi.', 'error');
     }
-    Swal.fire('Sukses', 'Data karyawan berhasil disimpan!', 'success');
-    closeModal('modal-employee');
-    loadAllData();
-  } catch (err) {
-    Swal.fire('Error', err.message, 'error');
-  }
-}
-
-function editEmployee(id) {
-  const emp = state.data.employees.find(x => x.id === id);
-  if (!emp) return;
-  const form = document.getElementById('formEmployee');
-  form.elements['id'].value = emp.id;
-  form.elements['nama'].value = emp.nama;
-  form.elements['gaji_pokok'].value = emp.gaji_pokok;
-  form.elements['tunjangan_kehadiran'].value = emp.tunjangan_kehadiran;
-  form.elements['utang_hari'].value = emp.utang_hari || '0';
-  form.elements['status'].value = emp.status;
-  form.elements['peran'].value = emp.peran || 'Karyawan';
-  form.elements['pin'].value = emp.pin;
-
-  if (emp.tgl_masuk) {
-    const p = emp.tgl_masuk.split('/');
-    if (p.length === 3) form.elements['tgl_masuk'].value = `${p[2]}-${p[1]}-${p[0]}`;
+    return;
   }
 
-  ['sen', 'sel', 'rab', 'kam', 'jum', 'sab', 'min'].forEach(day => {
-    form.elements[`shift_${day}`].value = emp[`shift_${day}`] || 'L';
-  });
+  if (sheetName === 'Employee') {
+    if (data['Tgl Masuk']) data['Tgl Masuk'] = formatDateToDDMMYYYY(new Date(data['Tgl Masuk']));
+    if (!data['Utang Hari']) data['Utang Hari'] = 0;
 
-  openModal('modal-employee');
-}
-
-async function handleAttendanceFormSubmit(e) {
-  e.preventDefault();
-  const formData = new FormData(e.target);
-  const data = Object.fromEntries(formData.entries());
-
-  if (data.tanggal) data.tanggal = formatDateToDDMMYYYY(new Date(data.tanggal));
-
-  Swal.fire({ title: 'Menyimpan Absensi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-  try {
-    await supabase.from('attendances').insert([data]);
-    Swal.fire('Sukses', 'Absensi manual berhasil disimpan!', 'success');
-    closeModal('modal-attendance');
-    loadAllData();
-  } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    try {
+      if (data.ID) {
+        const { error } = await supabase.from('employees').update(data).eq('ID', data.ID);
+        if (error) throw error;
+      } else {
+        data.ID = generateSeqID('EMP', state.data.Employee);
+        const { error } = await supabase.from('employees').insert([data]);
+        if (error) throw error;
+      }
+      Swal.fire('Sukses', 'Data karyawan berhasil disimpan!', 'success');
+      closeModal('modal-employee');
+      loadData();
+    } catch (err) {
+      Swal.fire('Error', err.message || 'Gagal menyimpan karyawan.', 'error');
+    }
   }
 }
 
@@ -1754,29 +1654,459 @@ function toggleSubStatus() {
   }
 }
 
-function populateSettingsForm() {
-  const f = document.getElementById('formSettings');
-  if (!f || !state.settings) return;
-  f.elements['Lat Salon'].value = state.settings['Lat Salon'] || '-8.583333';
-  f.elements['Long Salon'].value = state.settings['Long Salon'] || '115.283333';
-  f.elements['Batas Radius'].value = state.settings['Batas Radius'] || '50';
-  f.elements['Min Staff Pagi'].value = state.settings['Min Staff Pagi'] || '2';
-  f.elements['Min Staff Siang'].value = state.settings['Min Staff Siang'] || '2';
-  f.elements['PIN Owner Default'].value = state.settings['PIN Owner Default'] || '888888';
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371e3;
+  const p1 = lat1 * Math.PI / 180;
+  const p2 = lat2 * Math.PI / 180;
+  const dp = (lat2 - lat1) * Math.PI / 180;
+  const dl = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
-async function handleSettingsSubmit(e) {
+function checkNotifications(myReq) {
+  const notifBadge = document.getElementById('notifBadge');
+  const notifListEl = document.getElementById('notifList');
+  if (!notifBadge || !notifListEl) return;
+
+  const processedReq = myReq.filter(r => r.Status !== 'Pending' && r.Status !== 'Minta Batal');
+  processedReq.sort((a, b) => {
+    let numA = parseInt(a.ID.split('-')[1] || 0);
+    let numB = parseInt(b.ID.split('-')[1] || 0);
+    return numB - numA;
+  });
+
+  const cacheKey = 'ara_notif_read_' + state.auth.name;
+  const lastReadState = JSON.parse(localStorage.getItem(cacheKey)) || [];
+
+  let unreadCount = 0;
+  let html = '';
+
+  if (processedReq.length === 0) {
+    html = `<div class="text-center text-xs text-gray-400 py-10 bg-gray-50 rounded-2xl border border-gray-50">Belum ada notifikasi baru untuk Anda.</div>`;
+  } else {
+    processedReq.forEach(req => {
+      const isRead = lastReadState.some(saved => saved.id === req.ID && saved.status === req.Status);
+      if (!isRead) unreadCount++;
+
+      let iconColor = req.Status === 'Disetujui' ? 'text-emerald-500 bg-emerald-50' : 'text-rose-500 bg-rose-50';
+      let iconSign = req.Status === 'Disetujui' ? 'fa-circle-check' : 'fa-circle-xmark';
+      let dotUnread = !isRead ? `<div class="w-2 h-2 rounded-full bg-red-500 shadow-sm shrink-0"></div>` : '';
+
+      let msg = '';
+      if (req.Jenis === 'Tukar Waktu Shift') {
+        let targetText = req['Shift Tujuan'] === 'P' ? 'PAGI' : (req['Shift Tujuan'] === 'S' ? 'SIANG' : req['Shift Tujuan']);
+        msg = `Pengajuan Tukar Waktu Shift Anda pada tgl <b>${req['Tgl 1']}</b> (ke <b>${targetText}</b>) telah <span class="font-bold ${req.Status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.Status}</span> oleh Owner.`;
+      } else if (req.Jenis === 'Tukar Hari Libur') {
+        msg = `Pengajuan Tukar Libur Anda pada tgl <b>${req['Tgl 1']}</b> telah <span class="font-bold ${req.Status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.Status}</span> oleh Owner.`;
+      } else if (req.Jenis === 'Lembur') {
+        msg = `Pengajuan Lembur Anda pada tgl <b>${req['Tgl 1']}</b> (Durasi: <b>${req['Durasi Jam']} Jam</b>) telah <span class="font-bold ${req.Status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.Status}</span> oleh Owner.`;
+      }
+
+      html += `
+      <div class="flex items-start gap-3 p-3.5 rounded-2xl border ${isRead ? 'bg-white border-gray-100 hover:bg-gray-50' : 'bg-brandPink/5 border-brandPink/20 shadow-sm'} transition-colors mb-2">
+        <div class="w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${iconColor} shadow-inner text-lg"><i class="fa-solid ${iconSign}"></i></div>
+        <div class="flex-1 text-[11px] text-gray-600 leading-relaxed">${msg}</div>
+        ${dotUnread}
+      </div>`;
+    });
+  }
+
+  notifListEl.innerHTML = html;
+  if (unreadCount > 0) notifBadge.classList.remove('hidden');
+  else notifBadge.classList.add('hidden');
+
+  window.currentUnreadState = processedReq.map(r => ({ id: r.ID, status: r.Status }));
+}
+
+function showNotifModal() {
+  document.getElementById('notifBadge').classList.add('hidden');
+  if (window.currentUnreadState) {
+    const cacheKey = 'ara_notif_read_' + state.auth.name;
+    localStorage.setItem(cacheKey, JSON.stringify(window.currentUnreadState));
+  }
+
+  const me = state.auth.name;
+  let myReq = [];
+  if (state.data.PerubahanJadwal) myReq = myReq.concat(state.data.PerubahanJadwal.filter(c => c['Nama Karyawan'] === me));
+  if (state.data.Lembur) {
+    let myLembur = state.data.Lembur.filter(c => c['Nama Karyawan'] === me).map(l => ({
+      ID: l.ID, Status: l.Status, Jenis: 'Lembur', 'Tgl 1': l.Tanggal, 'Durasi Jam': l['Durasi Jam'], Alasan: l.Keterangan
+    }));
+    myReq = myReq.concat(myLembur);
+  }
+  checkNotifications(myReq);
+  openModal('modal-emp-notif');
+}
+
+async function uploadPhotoToSupabase(base64Data, filename) {
+  if (!base64Data) return '';
+  const byteString = atob(base64Data.split(',')[1]);
+  const mimeString = base64Data.split(',')[0].split(':')[1].split(';')[0];
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
+  }
+  const blob = new Blob([ab], { type: mimeString });
+
+  const path = `${filename}.jpg`;
+  const { error } = await supabase.storage
+    .from('absensi-photos')
+    .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+
+  if (error) throw error;
+
+  const { data: publicUrlData } = supabase.storage
+    .from('absensi-photos')
+    .getPublicUrl(path);
+
+  return publicUrlData.publicUrl;
+}
+
+function submitAbsensi(e) {
   e.preventDefault();
-  const formData = new FormData(e.target);
-  Swal.fire({ title: 'Menyimpan Pengaturan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-  try {
-    for (const [key, value] of formData.entries()) {
-      await supabase.from('app_settings').upsert({ key, value });
+  const namaUser = document.getElementById('empGreetingName').innerText.trim();
+  const jenisAbsen = document.querySelector('input[name="jenisAbsen"]:checked').value;
+  const photoData = document.getElementById('compressedPhotoData').value;
+
+  if (!photoData) { Swal.fire('Oops', 'Wajib ambil foto bukti di lokasi kerja!', 'warning'); return; }
+
+  const todayStr = formatDateToDDMMYYYY(new Date());
+  const myProfile = state.data.Employee.find(x => x.Nama === namaUser) || {};
+  const currentCode = getShiftForEmp(myProfile, todayStr);
+  const now = new Date();
+  let currentHour = now.getHours() + (now.getMinutes() / 60);
+
+  if (jenisAbsen === 'Masuk') {
+    let targetStartHour = currentCode === 'P' ? 8 : (currentCode === 'S' ? 12 : null);
+    if (targetStartHour !== null && currentHour < targetStartHour) {
+      let earlyHours = targetStartHour - currentHour;
+      earlyHours = Math.round(earlyHours * 10) / 10;
+
+      if (earlyHours > 0.75) {
+        Swal.fire({
+          title: '🌅 Terdeteksi Lembur Awal!',
+          html: `Jadwal masuk shift Anda adalah jam <b>${targetStartHour}:00</b>, namun Anda absen pada jam <b>${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</b> (Lebih awal <b>${earlyHours} Jam</b>).<br><br>Apakah Anda mendapat penugasan <b>Lembur Awal</b>?`,
+          icon: 'question',
+          showCancelButton: true,
+          confirmButtonColor: '#ff8fa3',
+          cancelButtonColor: '#9ca3af',
+          confirmButtonText: '<i class="fa-solid fa-business-time mr-1"></i> Ya, Ajukan Lembur',
+          cancelButtonText: 'Tidak, Hanya Rajin',
+          reverseButtons: true
+        }).then((result) => {
+          let triggerLembur = result.isConfirmed;
+          let durasiLembur = triggerLembur ? earlyHours : 0;
+          executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, durasiLembur);
+        });
+        return;
+      }
     }
-    Swal.fire('Sukses', 'Pengaturan berhasil diperbarui di Supabase Cloud!', 'success');
-    loadAllData();
+  } else if (jenisAbsen === 'Pulang') {
+    let targetEndHour = currentCode === 'P' ? 18 : (currentCode === 'S' ? 22 : null);
+    if (targetEndHour !== null) {
+      if (currentHour < 6) currentHour += 24;
+      if (currentHour > targetEndHour) {
+        let overtimeHours = currentHour - targetEndHour;
+        overtimeHours = Math.round(overtimeHours * 10) / 10;
+
+        if (overtimeHours >= 0.5) {
+          Swal.fire({
+            title: '⏰ Terdeteksi Jam Ekstra!',
+            html: `Jadwal pulang shift Anda adalah jam <b>${targetEndHour}:00</b>, namun Anda absen pada jam <b>${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</b> (Lebih <b>${overtimeHours} Jam</b>).<br><br>Apakah durasi tambahan ini diajukan sebagai <b>Lembur</b>?`,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#ff8fa3',
+            cancelButtonColor: '#9ca3af',
+            confirmButtonText: '<i class="fa-solid fa-business-time mr-1"></i> Ya, Ajukan Lembur',
+            cancelButtonText: 'Hanya Telat Pulang',
+            reverseButtons: true
+          }).then((result) => {
+            let triggerLembur = result.isConfirmed;
+            let durasiLembur = triggerLembur ? overtimeHours : 0;
+            executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, durasiLembur);
+          });
+          return;
+        }
+      }
+    }
+  }
+
+  executeAbsensiProses(namaUser, jenisAbsen, photoData, false, 0);
+}
+
+function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, durasiLembur) {
+  const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  if (!navigator.geolocation) {
+    Swal.fire('Error', 'Browser tidak mendukung deteksi lokasi.', 'error');
+    return;
+  }
+
+  Swal.fire({
+    title: `Memproses Absen ${jenisAbsen}...`,
+    text: 'Mencari koordinat GPS & Mengunggah Foto ke Supabase...',
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      try {
+        const lat = position.coords.latitude;
+        const long = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        if (accuracy > 70) {
+          Swal.fire('Sinyal GPS Lemah', `Akurasi perangkat Anda ${Math.round(accuracy)} meter.\nMohon aktifkan High Accuracy Mode dan pastikan di area terbuka.`, 'warning');
+          return;
+        }
+
+        const latSalon = parseFloat(state.settings['Lat Salon'] || -8.583333);
+        const longSalon = parseFloat(state.settings['Long Salon'] || 115.283333);
+        const batasRadius = parseFloat(state.settings['Batas Radius'] || 50);
+        const jarak = calculateDistance(lat, long, latSalon, longSalon);
+
+        if (jarak > batasRadius) {
+          Swal.fire('Akses Ditolak (Di Luar Radius)', `Anda terdeteksi ${Math.round(jarak)} meter dari Salon.\nBatas maksimal adalah ${batasRadius} meter.`, 'error');
+          return;
+        }
+
+        // Upload foto ke Supabase Storage
+        const fileName = `Absen_${namaUser.replace(/\s+/g, '_')}_${Date.now()}`;
+        const photoUrl = await uploadPhotoToSupabase(photoData, fileName);
+
+        const todayStr = formatDateToDDMMYYYY(new Date());
+        const mapsUrl = `https://www.google.com/maps?q=${lat},${long}`;
+
+        const existing = (state.data.Attendance || []).find(a => a.Tanggal === todayStr && a['Nama Karyawan'] === namaUser);
+
+        if (existing) {
+          const updatePayload = {
+            'Jam Pulang': timeNow,
+            'Foto Absensi': photoUrl,
+            'Lokasi Maps': mapsUrl
+          };
+          const { error } = await supabase
+            .from('attendances')
+            .update(updatePayload)
+            .eq('ID', existing.ID);
+          if (error) throw error;
+        } else {
+          const newId = generateSeqID('ATT', state.data.Attendance);
+          const insertPayload = {
+            'ID': newId,
+            'Tanggal': todayStr,
+            'Nama Karyawan': namaUser,
+            'Jam Masuk': timeNow,
+            'Jam Pulang': '',
+            'Status Kehadiran': 'Hadir',
+            'Sub-Status': '',
+            'Lokasi Maps': mapsUrl,
+            'Foto Absensi': photoUrl
+          };
+          const { error } = await supabase.from('attendances').insert([insertPayload]);
+          if (error) throw error;
+        }
+
+        let successMsg = `Absen ${jenisAbsen} berhasil dicatat!\n(Jarak Anda: ${Math.round(jarak)} Meter)`;
+
+        if (triggerLembur) {
+          Swal.fire({
+            title: 'Absen Sukses!',
+            text: successMsg + '\n\nSistem mengarahkan Anda ke Form Lembur...',
+            icon: 'success',
+            timer: 2500,
+            showConfirmButton: false
+          }).then(() => {
+            switchEmpView('pengajuan');
+            document.getElementById('formReqJenis').value = 'Lembur';
+            onChangeJenisPengajuan();
+            document.getElementById('formReqTgl1').value = formatDateToYYYYMMDD(new Date());
+            document.getElementById('formReqDurasi').value = durasiLembur;
+            document.getElementById('formReqAlasan').focus();
+          });
+        } else {
+          Swal.fire('Sukses', successMsg, 'success');
+        }
+
+        loadEmployeeData();
+        document.getElementById('absensiForm').reset();
+        document.getElementById('photoPreview').classList.add('hidden');
+        document.getElementById('photoPlaceholder').classList.remove('hidden');
+        document.getElementById('compressedPhotoData').value = '';
+      } catch (err) {
+        Swal.fire('Error', err.message || 'Gagal menyimpan absensi.', 'error');
+      }
+    },
+    (error) => {
+      let errorMsg = 'Gagal mengakses GPS perangkat Anda.';
+      if (error.code === 1) errorMsg = 'Akses lokasi ditolak (Permission Denied). Izinkan GPS pada browser.';
+      else if (error.code === 2) errorMsg = 'Sinyal GPS tidak tersedia.';
+      else if (error.code === 3) errorMsg = 'Waktu pencarian lokasi habis (Timeout).';
+      Swal.fire('Akses Ditolak', errorMsg, 'error');
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
+function handlePhotoCapture(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      const canvas = document.createElement('canvas');
+      const MAX_WIDTH = 800;
+      let width = img.width;
+      let height = img.height;
+      if (width > MAX_WIDTH) {
+        height = Math.round((height * MAX_WIDTH) / width);
+        width = MAX_WIDTH;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+      document.getElementById('compressedPhotoData').value = dataUrl;
+      const preview = document.getElementById('photoPreview');
+      const placeholder = document.getElementById('photoPlaceholder');
+      preview.src = dataUrl;
+      preview.classList.remove('hidden');
+      placeholder.classList.add('hidden');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function triggerGeneratePayroll() {
+  const period = document.getElementById('payrollPeriod').value;
+  if (!period) { Swal.fire('Oops', 'Pilih periode (Bulan & Tahun)!', 'warning'); return; }
+  const formattedPeriod = `${period.split('-')[1]}/${period.split('-')[0]}`;
+
+  Swal.fire({
+    title: 'Menghitung Payroll...',
+    text: 'Mengkalkulasi gaji, denda, dan tunjangan secara massal...',
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+
+  try {
+    const emps = state.data.Employee.filter(e => e.Status === 'Aktif' && e.Peran !== 'Owner');
+    const atts = state.data.Attendance.filter(a => {
+      if (!a.Tanggal) return false;
+      const parts = a.Tanggal.split('/');
+      return parts.length === 3 && `${parts[1]}/${parts[2]}` === formattedPeriod;
+    });
+
+    const potongans = state.data.Potongan.filter(p => {
+      if (!p.Tanggal) return false;
+      const parts = p.Tanggal.split('/');
+      return parts.length === 3 && `${parts[1]}/${parts[2]}` === formattedPeriod;
+    });
+
+    const lemburs = state.data.Lembur.filter(l => {
+      if (!l.Tanggal || l.Status !== 'Disetujui') return false;
+      const parts = l.Tanggal.split('/');
+      return parts.length === 3 && `${parts[1]}/${parts[2]}` === formattedPeriod;
+    });
+
+    let payrollPayloads = [];
+
+    emps.forEach(emp => {
+      const empName = emp.Nama;
+      const gajiPokok = parseFloat(emp['Gaji Pokok'] || 0);
+      const tunjanganDatabase = parseFloat(emp['Tunjangan Kehadiran'] || 0);
+
+      const upahHarianKhusus = gajiPokok / 25;
+      const upahLemburPerJam = gajiPokok / 250;
+      const dendaTelatKelalaian = gajiPokok / 50;
+
+      let countTelatKelalaian = 0;
+      let countAlfa = 0;
+      let countSakitOpsiA = 0;
+      let totalPotonganLain = 0;
+      let totalJamLembur = 0;
+
+      atts.forEach(a => {
+        if (a['Nama Karyawan'] === empName) {
+          let jamPulang = a['Jam Pulang'] ? a['Jam Pulang'].toString().trim() : '';
+          let isLupaPulang = (jamPulang === '');
+          let status = a['Status Kehadiran'] || 'Hadir';
+          let subStatus = a['Sub-Status'] || '';
+
+          if (status === 'Alfa' || isLupaPulang) {
+            countAlfa++;
+          } else if (status === 'Telat') {
+            if (subStatus.includes('Auto Alfa') || subStatus.includes('> 30m')) {
+              countAlfa++;
+            } else if (!subStatus.includes('Musibah')) {
+              countTelatKelalaian++;
+            }
+          } else if (status === 'Sakit') {
+            if (subStatus.includes('Opsi A')) countSakitOpsiA++;
+          }
+        }
+      });
+
+      potongans.forEach(p => {
+        if (p['Nama Karyawan'] === empName) totalPotonganLain += parseFloat(p.Nominal || 0);
+      });
+
+      lemburs.forEach(l => {
+        if (l['Nama Karyawan'] === empName) totalJamLembur += parseFloat(l['Durasi Jam'] || 0);
+      });
+
+      const uangLembur = totalJamLembur * upahLemburPerJam;
+      const isTunjanganHangus = (countAlfa > 0 || countSakitOpsiA > 0);
+      const tunjanganCair = isTunjanganHangus ? 0 : tunjanganDatabase;
+      const totalPendapatanKotor = gajiPokok + tunjanganCair + uangLembur;
+
+      let potTelat = countTelatKelalaian * dendaTelatKelalaian;
+      let potAlfa = countAlfa * upahHarianKhusus;
+      let totalPotonganSanksi = potTelat + potAlfa;
+
+      const batasMaksimalPotongan = totalPendapatanKotor / 2;
+      if (totalPotonganSanksi > batasMaksimalPotongan) {
+        let scale = batasMaksimalPotongan / totalPotonganSanksi;
+        potTelat = Math.round(potTelat * scale);
+        potAlfa = Math.round(potAlfa * scale);
+      }
+
+      const totalGaji = totalPendapatanKotor - potTelat - potAlfa - totalPotonganLain;
+
+      const existingRecord = (state.data.Payroll || []).find(p => p.Periode === formattedPeriod && p['Nama Karyawan'] === empName);
+      const payId = existingRecord ? existingRecord.ID : generateSeqID('PAY', state.data.Payroll);
+
+      payrollPayloads.push({
+        'ID': payId,
+        'Periode': formattedPeriod,
+        'Nama Karyawan': empName,
+        'Gaji Pokok': gajiPokok,
+        'Tunjangan': tunjanganCair,
+        'Uang Lembur': Math.round(uangLembur),
+        'Potongan Telat': Math.round(potTelat),
+        'Potongan Alfa': Math.round(potAlfa),
+        'Potongan Lain': Math.round(totalPotonganLain),
+        'Total Gaji Bersih': Math.round(totalGaji)
+      });
+    });
+
+    const { error } = await supabase
+      .from('payrolls')
+      .upsert(payrollPayloads, { onConflict: 'ID' });
+
+    if (error) throw error;
+
+    Swal.fire('Proses Selesai!', `Perhitungan Payroll periode ${formattedPeriod} berhasil diperbarui di Supabase.`, 'success');
+    loadData();
   } catch (err) {
-    Swal.fire('Error', err.message, 'error');
+    Swal.fire('Error', err.message || 'Gagal menghitung payroll.', 'error');
   }
 }
 
@@ -1790,59 +2120,43 @@ async function handleChangePIN(e) {
   if (pinBaru !== pinKonf) { Swal.fire('Gagal', 'Konfirmasi PIN Baru tidak cocok!', 'warning'); return; }
   if (pinLama === pinBaru) { Swal.fire('Info', 'PIN Baru tidak boleh sama dengan PIN Lama.', 'info'); return; }
 
-  Swal.fire({ title: 'Menyimpan PIN...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  Swal.fire({ title: 'Menyimpan PIN...', text: 'Mengenkripsi dan memperbarui akses Anda...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
   try {
-    const { data: emp, error: fetchErr } = await supabase
+    const empName = state.auth.name;
+    const { data: userRecord, error: fetchErr } = await supabase
       .from('employees')
-      .select('id, pin')
-      .eq('nama', state.auth.name)
-      .limit(1);
+      .select('*')
+      .eq('Nama', empName)
+      .single();
 
-    if (fetchErr || !emp || emp.length === 0) throw new Error('Data akun tidak ditemukan');
-    if (emp[0].pin !== pinLama) throw new Error('PIN Lama yang Anda masukkan salah!');
+    if (fetchErr || !userRecord) throw new Error('Akun Anda tidak ditemukan di database.');
+    if (userRecord.PIN !== pinLama) throw new Error('PIN Lama yang Anda masukkan SALAH.');
 
-    await supabase.from('employees').update({ pin: pinBaru }).eq('id', emp[0].id);
+    const { error: updateErr } = await supabase
+      .from('employees')
+      .update({ 'PIN': pinBaru })
+      .eq('Nama', empName);
 
-    Swal.fire('Berhasil Terkunci!', 'PIN akses berhasil diperbarui.', 'success');
+    if (updateErr) throw updateErr;
+
+    Swal.fire('Berhasil Terkunci!', 'PIN berhasil diperbarui secara permanen.', 'success');
     document.getElementById('formGantiPin').reset();
     closeModal('modal-ganti-pin');
+
+    if (state.auth.data) state.auth.data.PIN = pinBaru;
+    localStorage.setItem('ara_auth', JSON.stringify(state.auth));
   } catch (err) {
     Swal.fire('Akses Ditolak', err.message, 'error');
   }
 }
 
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371e3;
-  const p1 = lat1 * Math.PI / 180;
-  const p2 = lat2 * Math.PI / 180;
-  const dp = (lat2 - lat1) * Math.PI / 180;
-  const dl = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
-  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+function formatDateToYYYYMMDD(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function toggleSalaryVisibility() {
-  const sal = document.getElementById('empRealtimeSalary');
-  const ded = document.getElementById('empCurrentDeduction');
-  const ico = document.getElementById('eyeIconSalary');
-  sal.classList.toggle('unblurred');
-  ded.classList.toggle('unblurred');
-  ico.classList.replace(sal.classList.contains('unblurred') ? 'fa-eye-slash' : 'fa-eye', sal.classList.contains('unblurred') ? 'fa-eye' : 'fa-eye-slash');
+function formatDateToDDMMYYYY(d) {
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
-
-function switchEmpView(view) {
-  document.querySelectorAll('.emp-view-section').forEach(el => el.classList.remove('active'));
-  document.getElementById(`emp-view-${view}`).classList.add('active');
-  document.querySelectorAll('#app-employee nav button').forEach(b => b.className = 'flex flex-col items-center gap-1 text-gray-400 hover:text-brandPink transition-colors w-1/3');
-  document.getElementById(`empNav-${view}`).className = 'flex flex-col items-center gap-1 text-brandPink transition-colors w-1/3';
-}
-
-function openModal(id) { const m = document.getElementById(id); if (m) m.classList.remove('hidden'); }
-function closeModal(id) { const m = document.getElementById(id); if (m) m.classList.add('hidden'); }
-function openAddEmployeeModal() { const form = document.getElementById('formEmployee'); form.reset(); form.elements['id'].value = ""; openModal('modal-employee'); }
-
-function formatDateToYYYYMMDD(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
-function formatDateToDDMMYYYY(d) { return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`; }
 
 window.onload = init;

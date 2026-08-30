@@ -36,60 +36,19 @@ const menuItems = [
 ];
 
 async function init() {
-  if (!supabase) {
-    console.error("Supabase SDK gagal dimuat. Periksa koneksi internet.");
-    return;
-  }
-
-  // Cek sesi autentikasi lokal
-  const savedAuth = localStorage.getItem('ara_supabase_auth');
+  const savedAuth = localStorage.getItem('ara_auth');
   if (savedAuth) {
     state.auth = JSON.parse(savedAuth);
     launchApp();
   }
-
-  // Supabase Auth Session Listener
-  supabase.auth.onAuthStateChange(async (event, session) => {
-    if (session && !state.auth) {
-      const user = session.user;
-      state.auth = {
-        success: true,
-        role: user.user_metadata?.role || 'Owner',
-        name: user.user_metadata?.name || user.email,
-        email: user.email,
-        auth_id: user.id
-      };
-      localStorage.setItem('ara_supabase_auth', JSON.stringify(state.auth));
-      launchApp();
-    }
-  });
 }
 
-function switchLoginMode(mode) {
-  const tabPin = document.getElementById('tabLoginPin');
-  const tabAuth = document.getElementById('tabLoginAuth');
-  const formPin = document.getElementById('formLoginPin');
-  const formAuth = document.getElementById('formLoginAuth');
-
-  if (mode === 'pin') {
-    tabPin.className = 'flex-1 py-2 rounded-xl bg-white shadow-sm text-brandText transition-all';
-    tabAuth.className = 'flex-1 py-2 rounded-xl text-gray-400 hover:text-brandText transition-all';
-    formPin.classList.remove('hidden');
-    formAuth.classList.add('hidden');
-  } else {
-    tabAuth.className = 'flex-1 py-2 rounded-xl bg-white shadow-sm text-brandText transition-all';
-    tabPin.className = 'flex-1 py-2 rounded-xl text-gray-400 hover:text-brandText transition-all';
-    formAuth.classList.remove('hidden');
-    formPin.classList.add('hidden');
-  }
-}
-
-async function handleLoginPIN(e) {
+async function handleLogin(e) {
   e.preventDefault();
   const pin = document.getElementById('loginPin').value;
   if (!pin) return;
 
-  Swal.fire({ title: 'Memverifikasi PIN...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  Swal.fire({ title: 'Memeriksa...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
   try {
     const { data: settingsData } = await supabase.from('app_settings').select('*');
@@ -118,45 +77,20 @@ async function handleLoginPIN(e) {
       Swal.fire('Ditolak', 'PIN tidak terdaftar atau akun dinonaktifkan.', 'error');
     }
   } catch (err) {
-    Swal.fire('Error Database', err.message || 'Gagal koneksi ke Supabase', 'error');
-  }
-}
-
-async function handleLoginAuth(e) {
-  e.preventDefault();
-  const email = document.getElementById('authEmail').value;
-  const password = document.getElementById('authPassword').value;
-
-  Swal.fire({ title: 'Menghubungkan Supabase Auth...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-
-    const user = data.user;
-    finishLogin({
-      success: true,
-      role: user.user_metadata?.role || 'Owner',
-      name: user.user_metadata?.name || user.email,
-      email: user.email,
-      auth_id: user.id
-    });
-  } catch (err) {
-    Swal.fire('Login Gagal', err.message, 'error');
+    Swal.fire('Error Sistem', err.message || 'Gagal koneksi ke server Supabase', 'error');
   }
 }
 
 function finishLogin(res) {
   state.auth = res;
-  localStorage.setItem('ara_supabase_auth', JSON.stringify(res));
+  localStorage.setItem('ara_auth', JSON.stringify(res));
   Swal.close();
   launchApp();
 }
 
-async function logout() {
-  if (supabase) await supabase.auth.signOut();
+function logout() {
   state.auth = null;
-  localStorage.removeItem('ara_supabase_auth');
+  localStorage.removeItem('ara_auth');
   document.getElementById('app-owner').classList.add('hidden');
   document.getElementById('app-employee').classList.add('hidden');
   document.getElementById('app-login').classList.remove('hidden');
@@ -217,7 +151,7 @@ async function loadAllData() {
     if (state.view === 'payroll') renderPayrollTable();
     if (state.view === 'settings') populateSettingsForm();
   } catch (err) {
-    console.error("Error fetching Supabase data:", err);
+    console.error("Error loading Supabase data:", err);
   }
 }
 
@@ -377,7 +311,7 @@ function renderDashboardAnalytics() {
         labels: ['Tepat Waktu', 'Terlambat', 'Alfa / Lupa Pulang'],
         datasets: [{
           data: [countTepat || 1, countTelat, countAlfa],
-          backgroundColor: countTepat + countTelat + countAlfa === 0 ? ['#f3f4f6', '#f3f4f6', '#f3f4f6'] : ['#34d399', '#fbbf24', '#f43f5e'],
+          backgroundColor: countTepat + countTelat + countAlfa === 0 ? ['#f3f4f6'] : ['#34d399', '#fbbf24', '#f43f5e'],
           borderWidth: 0,
           hoverOffset: 4
         }]
@@ -691,6 +625,37 @@ function renderShiftCalendar() {
   table.innerHTML = thead + `</tbody>`;
 }
 
+function showShiftWarningModal(dateStr, dayName, countP, minP, countS, minS) {
+  document.getElementById('msd-title').innerText = `${dayName}, ${dateStr}`;
+  const content = document.getElementById('msd-content');
+
+  let pStatus = countP >= minP
+    ? `<span class="text-emerald-500 font-black text-xs uppercase bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"><i class="fa-solid fa-check mr-1"></i>Aman</span>`
+    : `<span class="text-rose-500 font-black text-xs uppercase bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1 animate-pulse"></i>Kurang ${minP - countP} Orang</span>`;
+
+  let sStatus = countS >= minS
+    ? `<span class="text-emerald-500 font-black text-xs uppercase bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"><i class="fa-solid fa-check mr-1"></i>Aman</span>`
+    : `<span class="text-rose-500 font-black text-xs uppercase bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"><i class="fa-solid fa-triangle-exclamation mr-1 animate-pulse"></i>Kurang ${minS - countS} Orang</span>`;
+
+  content.innerHTML = `
+    <div class="p-4 rounded-2xl border ${countP < minP ? 'border-rose-200 bg-rose-50/50' : 'border-gray-100 bg-gray-50'} mb-3">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-[11px] font-bold text-gray-500 uppercase">Shift Pagi</span>
+        ${pStatus}
+      </div>
+      <div class="text-sm font-black text-brandText flex items-end gap-2">${countP} Karyawan (Min: ${minP})</div>
+    </div>
+    <div class="p-4 rounded-2xl border ${countS < minS ? 'border-rose-200 bg-rose-50/50' : 'border-gray-100 bg-gray-50'}">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-[11px] font-bold text-gray-500 uppercase">Shift Siang</span>
+        ${sStatus}
+      </div>
+      <div class="text-sm font-black text-brandText flex items-end gap-2">${countS} Karyawan (Min: ${minS})</div>
+    </div>
+  `;
+  openModal('modal-shift-detail');
+}
+
 async function updateShiftByOwner(empName, dateStr, newCode) {
   Swal.fire({ title: 'Menyimpan Jadwal...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
   let shiftText = newCode === 'P' ? 'Pagi' : (newCode === 'S' ? 'Siang' : 'Libur');
@@ -937,102 +902,567 @@ function renderEmployeeDashboard() {
   renderPengajuanEmployee();
 }
 
-async function submitAbsensi(e) {
+function renderJadwalKaryawan(empProfile) {
+  const el = document.getElementById('empJadwalList');
+  if (!el) return;
+
+  let html = '';
+  const today = new Date();
+  const hariList = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+  for (let i = 0; i < 7; i++) {
+    let d = new Date(today);
+    d.setDate(today.getDate() + i);
+    let dateStr = formatDateToDDMMYYYY(d);
+    let dayName = i === 0 ? 'Hari Ini' : hariList[d.getDay()];
+
+    let code = getShiftForEmp(empProfile, dateStr);
+    let bgCode = code === 'P' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
+                 code === 'S' ? 'bg-amber-50 border-amber-100 text-amber-700' :
+                 'bg-rose-50 border-rose-100 text-rose-700';
+    let iconCode = code === 'P' ? 'fa-sun text-emerald-500' :
+                   code === 'S' ? 'fa-cloud-sun text-amber-500' :
+                   'fa-mug-hot text-rose-500';
+
+    let textStatus = code === 'P' ? 'PAGI (08:00 - 18:00)' :
+                     code === 'S' ? 'SIANG (12:00 - 22:00)' :
+                     'Libur / Off';
+
+    html += `
+    <div class="flex items-center justify-between p-3.5 rounded-2xl border ${bgCode} shadow-sm mb-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-sm">
+          <i class="fa-solid ${iconCode}"></i>
+        </div>
+        <div>
+          <p class="text-sm font-bold">${dayName}</p>
+          <p class="text-[10px] opacity-80">${dateStr}</p>
+        </div>
+      </div>
+      <div class="text-right">
+        <p class="text-xs font-black uppercase tracking-wider">${textStatus}</p>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function showAttDetailModal(attId) {
+  const att = state.data.attendances.find(x => x.id === attId);
+  if (!att) return;
+
+  document.getElementById('attDetailDate').innerText = att.tanggal;
+  document.getElementById('attDetailIn').innerText = att.jam_masuk || '--:--';
+
+  let jamPulang = att.jam_pulang ? att.jam_pulang.trim() : '';
+  document.getElementById('attDetailOut').innerText = jamPulang || '--:--';
+
+  const todayStr = formatDateToDDMMYYYY(new Date());
+  let finalStatus = att.status_kehadiran || 'Hadir';
+  if (jamPulang === '' && att.tanggal !== todayStr) {
+    finalStatus = 'Auto-Alfa (Lupa Pulang)';
+  }
+
+  const statusBadge = document.getElementById('attDetailStatusBadge');
+  statusBadge.innerText = finalStatus;
+
+  if (finalStatus.includes('Alfa')) {
+    statusBadge.className = 'px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-500/90 text-white backdrop-blur-sm';
+  } else if (finalStatus === 'Telat') {
+    statusBadge.className = 'px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-500/90 text-white backdrop-blur-sm';
+  } else {
+    statusBadge.className = 'px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-500/90 text-white backdrop-blur-sm';
+  }
+
+  const photoImg = document.getElementById('attDetailPhoto');
+  photoImg.src = att.foto_absensi || '';
+
+  const mapsBtn = document.getElementById('attDetailMapsBtn');
+  if (att.lokasi_maps) {
+    mapsBtn.href = att.lokasi_maps;
+    mapsBtn.classList.remove('hidden');
+  } else {
+    mapsBtn.classList.add('hidden');
+  }
+
+  openModal('modal-emp-att-detail');
+}
+
+function renderRiwayatAbsensi(myAtt) {
+  const el = document.getElementById('empAttendanceHistoryList');
+  if (!el) return;
+
+  if (!myAtt || myAtt.length === 0) {
+    el.innerHTML = `<div class="text-center text-xs text-gray-400 py-4 bg-white rounded-2xl border border-gray-50 shadow-sm">Belum ada riwayat absensi bulan ini.</div>`;
+    return;
+  }
+
+  let sortedAtt = [...myAtt].slice(0, 5);
+  let html = '';
+  const todayStr = formatDateToDDMMYYYY(new Date());
+
+  sortedAtt.forEach(a => {
+    let status = a.status_kehadiran || 'Hadir';
+    let jamPulang = a.jam_pulang ? a.jam_pulang.trim() : '';
+    let isLupaPulang = (jamPulang === '');
+
+    if (isLupaPulang && a.tanggal !== todayStr) {
+      status = 'Auto-Alfa';
+    }
+
+    let statusColor = status === 'Telat' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+                      (status.includes('Alfa') ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200');
+    let inTime = a.jam_masuk || '--:--';
+    let outTime = jamPulang || '--:--';
+
+    html += `
+    <div onclick="showAttDetailModal('${a.id}')" class="bg-white rounded-2xl p-3.5 shadow-sm border border-gray-100 mb-2.5 flex justify-between items-center hover:bg-gray-50 transition-all cursor-pointer group">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-full bg-brandPink/10 text-brandPink flex items-center justify-center text-xs shadow-inner">
+          <i class="fa-solid fa-camera"></i>
+        </div>
+        <div>
+          <p class="text-xs font-bold text-brandText mb-1">${a.tanggal}</p>
+          <p class="text-[10px] text-gray-500 font-medium">
+            <span class="mr-2"><i class="fa-solid fa-arrow-right-to-bracket text-emerald-400"></i> ${inTime}</span>
+            <span><i class="fa-solid fa-arrow-right-from-bracket text-rose-400"></i> ${outTime}</span>
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="px-2.5 py-1 rounded-lg text-[10px] font-bold border shadow-sm ${statusColor}">${status}</span>
+        <i class="fa-solid fa-chevron-right text-gray-300 text-xs group-hover:text-brandPink transition-colors"></i>
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html;
+}
+
+function onChangeJenisPengajuan() {
+  const jenis = document.getElementById('formReqJenis').value;
+  const wrapTgl2 = document.getElementById('wrapTgl2');
+  const wrapShift = document.getElementById('wrapShiftTujuan');
+  const wrapLembur = document.getElementById('wrapLembur');
+  const lblTgl1 = document.getElementById('lblReqTgl1');
+  const inputTgl2 = document.getElementById('formReqTgl2');
+  const inputDurasi = document.getElementById('formReqDurasi');
+  const infoEl = document.getElementById('currentShiftInfo');
+
+  if (jenis === 'Tukar Hari Libur') {
+    wrapTgl2.classList.remove('hidden');
+    wrapShift.classList.add('hidden');
+    if (wrapLembur) wrapLembur.classList.add('hidden');
+    lblTgl1.innerText = "Tanggal Libur Asli";
+    inputTgl2.required = true;
+    if (inputDurasi) inputDurasi.required = false;
+    if (infoEl) infoEl.classList.add('hidden');
+  } else if (jenis === 'Tukar Waktu Shift') {
+    wrapTgl2.classList.add('hidden');
+    wrapShift.classList.remove('hidden');
+    if (wrapLembur) wrapLembur.classList.add('hidden');
+    lblTgl1.innerText = "Tanggal Shift";
+    inputTgl2.required = false;
+    if (inputDurasi) inputDurasi.required = false;
+    checkCurrentShift();
+  } else if (jenis === 'Lembur') {
+    wrapTgl2.classList.add('hidden');
+    wrapShift.classList.add('hidden');
+    if (wrapLembur) wrapLembur.classList.remove('hidden');
+    lblTgl1.innerText = "Tanggal Lembur";
+    inputTgl2.required = false;
+    if (inputDurasi) inputDurasi.required = true;
+    if (infoEl) infoEl.classList.add('hidden');
+  }
+}
+
+function checkCurrentShift() {
+  const dateInput = document.getElementById('formReqTgl1').value;
+  const infoEl = document.getElementById('currentShiftInfo');
+  const targetSelect = document.getElementById('formReqShiftTujuan');
+  const jenis = document.getElementById('formReqJenis').value;
+
+  if (!dateInput || jenis !== 'Tukar Waktu Shift') {
+    if (infoEl) infoEl.classList.add('hidden');
+    return;
+  }
+
+  const d = new Date(dateInput);
+  const dateStr = formatDateToDDMMYYYY(d);
+  const myProfile = state.data.employees.find(e => e.nama === state.auth.name) || {};
+  const currentCode = getShiftForEmp(myProfile, dateStr);
+
+  let textCode = currentCode === 'P' ? 'PAGI (08:00 - 18:00)' : (currentCode === 'S' ? 'SIANG (12:00 - 22:00)' : 'LIBUR / OFF');
+
+  if (infoEl) {
+    infoEl.innerHTML = `<i class="fa-solid fa-circle-info mr-1"></i> Jadwal Saat Ini: <strong>${textCode}</strong>`;
+    infoEl.classList.remove('hidden');
+  }
+
+  if (currentCode === 'P') targetSelect.value = 'S';
+  else if (currentCode === 'S') targetSelect.value = 'P';
+}
+
+async function handlePengajuanJadwal(e) {
+  e.preventDefault();
+  let jenis = document.getElementById('formReqJenis').value;
+  let tgl1 = document.getElementById('formReqTgl1').value;
+  let tgl2 = document.getElementById('formReqTgl2').value;
+  let alasan = document.getElementById('formReqAlasan').value;
+
+  if (!tgl1 || !alasan) return;
+
+  Swal.fire({ title: 'Mengajukan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+  try {
+    if (jenis === 'Lembur') {
+      let durasi = document.getElementById('formReqDurasi').value;
+      if (!durasi) { Swal.fire('Oops', 'Isi durasi jam lembur!', 'warning'); return; }
+
+      await supabase.from('overtimes').insert([{
+        tanggal: formatDateToDDMMYYYY(new Date(tgl1)),
+        nama_karyawan: state.auth.name,
+        durasi_jam: parseFloat(durasi),
+        keterangan: alasan,
+        status: 'Pending'
+      }]);
+
+      Swal.fire('Sukses', 'Pengajuan lembur berhasil dikirim!', 'success');
+      e.target.reset();
+      loadEmployeeData();
+      return;
+    }
+
+    if (jenis === 'Tukar Hari Libur' && !tgl2) { Swal.fire('Oops', 'Isi tukar ke tanggal!', 'warning'); return; }
+
+    let shiftTujuan = jenis === 'Tukar Hari Libur' ? 'L' : document.getElementById('formReqShiftTujuan').value;
+
+    await supabase.from('schedule_changes').insert([{
+      nama_karyawan: state.auth.name,
+      jenis: jenis,
+      tgl_1: formatDateToDDMMYYYY(new Date(tgl1)),
+      tgl_2: tgl2 ? formatDateToDDMMYYYY(new Date(tgl2)) : null,
+      shift_tujuan: shiftTujuan,
+      alasan: alasan,
+      status: 'Pending'
+    }]);
+
+    Swal.fire('Sukses', 'Pengajuan jadwal berhasil dikirim!', 'success');
+    e.target.reset();
+    document.getElementById('currentShiftInfo').classList.add('hidden');
+    loadEmployeeData();
+  } catch (err) {
+    Swal.fire('Error', err.message, 'error');
+  }
+}
+
+function renderPengajuanEmployee() {
+  const el = document.getElementById('empReqHistoryList');
+  if (!el) return;
+  const me = state.auth.name;
+
+  let myReq = [];
+  myReq = myReq.concat(state.data.schedule_changes.filter(c => c.nama_karyawan === me));
+  myReq = myReq.concat(state.data.overtimes.filter(c => c.nama_karyawan === me).map(l => ({
+    id: l.id,
+    status: l.status,
+    jenis: 'Lembur',
+    tgl_1: l.tanggal,
+    durasi_jam: l.durasi_jam,
+    alasan: l.keterangan
+  })));
+
+  checkNotifications(myReq);
+
+  if (myReq.length === 0) {
+    el.innerHTML = `<div class="text-center text-xs text-gray-400 py-4 bg-white rounded-2xl border border-gray-50 shadow-sm">Belum ada riwayat pengajuan</div>`;
+    return;
+  }
+
+  let html = '';
+  myReq.forEach(c => {
+    let bg = 'bg-gray-50 text-gray-600 border-gray-100';
+    if (c.status === 'Pending' || c.status === 'Minta Batal') bg = 'bg-amber-50 text-amber-700 border-amber-200';
+    else if (c.status === 'Disetujui') bg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    else if (c.status === 'Ditolak' || c.status === 'Dibatalkan') bg = 'bg-rose-50 text-rose-700 border-rose-200';
+
+    let detailStr = "";
+    if (c.jenis === 'Tukar Hari Libur') {
+      detailStr = `Tukar Libur <span class="font-bold text-brandText">${c.tgl_1}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> <span class="font-bold text-brandText">${c.tgl_2}</span>`;
+    } else if (c.jenis === 'Tukar Waktu Shift') {
+      let targetShiftText = c.shift_tujuan === 'P' ? 'PAGI' : (c.shift_tujuan === 'S' ? 'SIANG' : c.shift_tujuan);
+      detailStr = `Tukar Shift tgl <span class="font-bold text-brandText">${c.tgl_1}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Ke <span class="font-bold text-brandText">${targetShiftText}</span>`;
+    } else if (c.jenis === 'Lembur') {
+      detailStr = `Lembur <span class="font-bold text-brandText">${c.tgl_1}</span> <i class="fa-solid fa-arrow-right text-[10px] mx-1 text-brandPink"></i> Durasi: <span class="font-bold text-brandText">${c.durasi_jam} Jam</span>`;
+    }
+
+    html += `<div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-50 mb-3"><div class="flex justify-between items-start mb-2"><span class="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${bg}">${c.status}</span><span class="text-[10px] font-bold text-gray-400 bg-gray-100 px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm">${c.jenis}</span></div><p class="text-xs text-gray-500 mb-1">${detailStr}</p><p class="text-[11px] text-gray-400 italic font-medium leading-relaxed">"${c.alasan}"</p></div>`;
+  });
+  el.innerHTML = html;
+}
+
+function checkNotifications(myReq) {
+  const notifBadge = document.getElementById('notifBadge');
+  const notifListEl = document.getElementById('notifList');
+  if (!notifBadge || !notifListEl) return;
+
+  const processedReq = myReq.filter(r => r.status !== 'Pending' && r.status !== 'Minta Batal');
+  const cacheKey = 'ara_notif_read_' + state.auth.name;
+  const lastReadState = JSON.parse(localStorage.getItem(cacheKey)) || [];
+
+  let unreadCount = 0;
+  let html = '';
+
+  if (processedReq.length === 0) {
+    html = `<div class="text-center text-xs text-gray-400 py-10 bg-gray-50 rounded-2xl border border-gray-50">Belum ada notifikasi baru untuk Anda.</div>`;
+  } else {
+    processedReq.forEach(req => {
+      const isRead = lastReadState.some(saved => saved.id === req.id && saved.status === req.status);
+      if (!isRead) unreadCount++;
+
+      let iconColor = req.status === 'Disetujui' ? 'text-emerald-500 bg-emerald-50' : 'text-rose-500 bg-rose-50';
+      let iconSign = req.status === 'Disetujui' ? 'fa-circle-check' : 'fa-circle-xmark';
+      let dotUnread = !isRead ? `<div class="w-2 h-2 rounded-full bg-red-500 shadow-sm shrink-0"></div>` : '';
+
+      let msg = '';
+      if (req.jenis === 'Tukar Waktu Shift') {
+        let targetText = req.shift_tujuan === 'P' ? 'PAGI' : (req.shift_tujuan === 'S' ? 'SIANG' : req.shift_tujuan);
+        msg = `Pengajuan Tukar Waktu Shift Anda pada tgl <b>${req.tgl_1}</b> (ke <b>${targetText}</b>) telah <span class="font-bold ${req.status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.status}</span> oleh Owner.`;
+      } else if (req.jenis === 'Tukar Hari Libur') {
+        msg = `Pengajuan Tukar Libur Anda pada tgl <b>${req.tgl_1}</b> telah <span class="font-bold ${req.status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.status}</span> oleh Owner.`;
+      } else if (req.jenis === 'Lembur') {
+        msg = `Pengajuan Lembur Anda pada tgl <b>${req.tgl_1}</b> (Durasi: <b>${req.durasi_jam} Jam</b>) telah <span class="font-bold ${req.status === 'Disetujui' ? 'text-emerald-600' : 'text-rose-600'}">${req.status}</span> oleh Owner.`;
+      }
+
+      html += `
+      <div class="flex items-start gap-3 p-3.5 rounded-2xl border ${isRead ? 'bg-white border-gray-100 hover:bg-gray-50' : 'bg-brandPink/5 border-brandPink/20 shadow-sm'} transition-colors mb-2">
+        <div class="w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${iconColor} shadow-inner text-lg"><i class="fa-solid ${iconSign}"></i></div>
+        <div class="flex-1 text-[11px] text-gray-600 leading-relaxed">${msg}</div>
+        ${dotUnread}
+      </div>`;
+    });
+  }
+
+  notifListEl.innerHTML = html;
+  if (unreadCount > 0) notifBadge.classList.remove('hidden');
+  else notifBadge.classList.add('hidden');
+
+  window.currentUnreadState = processedReq.map(r => ({ id: r.id, status: r.status }));
+}
+
+function showNotifModal() {
+  document.getElementById('notifBadge').classList.add('hidden');
+  if (window.currentUnreadState) {
+    const cacheKey = 'ara_notif_read_' + state.auth.name;
+    localStorage.setItem(cacheKey, JSON.stringify(window.currentUnreadState));
+  }
+  openModal('modal-emp-notif');
+}
+
+function submitAbsensi(e) {
   e.preventDefault();
   const namaUser = document.getElementById('empGreetingName').innerText.trim();
   const jenisAbsen = document.querySelector('input[name="jenisAbsen"]:checked').value;
   const photoData = document.getElementById('compressedPhotoData').value;
 
   if (!photoData) {
-    Swal.fire('Foto Wajib', 'Ambil foto selfie di lokasi kerja terlebih dahulu.', 'warning');
+    Swal.fire('Oops', 'Wajib ambil foto bukti di lokasi kerja!', 'warning');
     return;
   }
+
+  const todayStr = formatDateToDDMMYYYY(new Date());
+  const myProfile = state.data.employees.find(x => x.nama === namaUser) || {};
+  const currentCode = getShiftForEmp(myProfile, todayStr);
+  const now = new Date();
+  let currentHour = now.getHours() + (now.getMinutes() / 60);
+
+  if (jenisAbsen === 'Masuk') {
+    let targetStartHour = currentCode === 'P' ? 8 : (currentCode === 'S' ? 12 : null);
+
+    if (targetStartHour !== null && currentHour < targetStartHour) {
+      let earlyHours = Math.round((targetStartHour - currentHour) * 10) / 10;
+      if (earlyHours > 0.75) {
+        Swal.fire({
+          title: '🌅 Terdeteksi Lembur Awal!',
+          html: `Jadwal masuk shift Anda adalah jam <b>${targetStartHour}:00</b>, namun Anda absen pada jam <b>${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</b> (Lebih awal <b>${earlyHours} Jam</b>).<br><br>Apakah Anda mendapat penugasan <b>Lembur Awal</b>?`,
+          icon: 'question',
+          showCancelButton: true,
+          confirmButtonColor: '#ff8fa3',
+          cancelButtonColor: '#9ca3af',
+          confirmButtonText: '<i class="fa-solid fa-business-time mr-1"></i> Ya, Ajukan Lembur',
+          cancelButtonText: 'Tidak, Hanya Rajin',
+          reverseButtons: true
+        }).then((result) => {
+          executeAbsensiProses(namaUser, jenisAbsen, photoData, result.isConfirmed, result.isConfirmed ? earlyHours : 0);
+        });
+        return;
+      }
+    }
+  } else if (jenisAbsen === 'Pulang') {
+    let targetEndHour = currentCode === 'P' ? 18 : (currentCode === 'S' ? 22 : null);
+
+    if (targetEndHour !== null) {
+      if (currentHour < 6) currentHour += 24;
+      if (currentHour > targetEndHour) {
+        let overtimeHours = Math.round((currentHour - targetEndHour) * 10) / 10;
+        if (overtimeHours >= 0.5) {
+          Swal.fire({
+            title: '⏰ Terdeteksi Jam Ekstra!',
+            html: `Jadwal pulang shift Anda adalah jam <b>${targetEndHour}:00</b>, namun Anda absen pada jam <b>${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</b> (Lebih <b>${overtimeHours} Jam</b>).<br><br>Apakah durasi tambahan ini diajukan sebagai <b>Lembur</b>?`,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#ff8fa3',
+            cancelButtonColor: '#9ca3af',
+            confirmButtonText: '<i class="fa-solid fa-business-time mr-1"></i> Ya, Ajukan Lembur',
+            cancelButtonText: 'Hanya Telat Pulang',
+            reverseButtons: true
+          }).then((result) => {
+            executeAbsensiProses(namaUser, jenisAbsen, photoData, result.isConfirmed, result.isConfirmed ? overtimeHours : 0);
+          });
+          return;
+        }
+      }
+    }
+  }
+
+  executeAbsensiProses(namaUser, jenisAbsen, photoData, false, 0);
+}
+
+function executeAbsensiProses(namaUser, jenisAbsen, photoData, triggerLembur, durasiLembur) {
+  const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
   if (!navigator.geolocation) {
-    Swal.fire('Error GPS', 'Perangkat tidak mendukung GPS.', 'error');
+    Swal.fire('Error', 'Browser tidak mendukung deteksi lokasi.', 'error');
     return;
   }
 
-  Swal.fire({ title: 'Memvalidasi Lokasi GPS...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  Swal.fire({ title: `Memproses Absen ${jenisAbsen}...`, text: 'Mencari titik koordinat GPS & Validasi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
-  navigator.geolocation.getCurrentPosition(async (position) => {
-    const lat = position.coords.latitude;
-    const long = position.coords.longitude;
-    const accuracy = position.coords.accuracy;
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      const lat = position.coords.latitude;
+      const long = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
 
-    if (accuracy > 70) {
-      Swal.fire('Sinyal GPS Lemah', `Akurasi terdeteksi ${Math.round(accuracy)}m. Pindah ke area terbuka untuk mencegah Fake GPS.`, 'warning');
-      return;
-    }
-
-    const latSalon = parseFloat(state.settings['Lat Salon'] || -8.583333);
-    const longSalon = parseFloat(state.settings['Long Salon'] || 115.283333);
-    const batasRadius = parseFloat(state.settings['Batas Radius'] || 50);
-    const jarak = calculateDistance(lat, long, latSalon, longSalon);
-
-    if (jarak > batasRadius) {
-      Swal.fire('Di Luar Jangkauan', `Jarak Anda ${Math.round(jarak)}m dari Salon (Batas Maks: ${batasRadius}m).`, 'error');
-      return;
-    }
-
-    // Upload Foto Selfie ke Supabase Storage
-    let photoUrl = '';
-    try {
-      const fileName = `absen_${namaUser.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
-      const base64Data = photoData.split(',')[1];
-      const byteCharacters = atob(base64Data);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'image/jpeg' });
-
-      const { data: uploadData, error: uploadErr } = await supabase.storage.from('attendance_photos').upload(fileName, blob, { contentType: 'image/jpeg' });
-      if (uploadErr) throw uploadErr;
-
-      const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
-      photoUrl = publicUrlData.publicUrl;
-    } catch (photoErr) {
-      console.warn("Storage upload fallback to base64:", photoErr.message);
-      photoUrl = photoData;
-    }
-
-    const todayStr = formatDateToDDMMYYYY(new Date());
-    const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-    const mapsUrl = `https://www.google.com/maps?q=${lat},${long}`;
-
-    try {
-      const { data: existing } = await supabase
-        .from('attendances')
-        .select('*')
-        .eq('tanggal', todayStr)
-        .eq('nama_karyawan', namaUser);
-
-      if (existing && existing.length > 0) {
-        await supabase.from('attendances').update({ jam_pulang: timeNow, foto_absensi: photoUrl }).eq('id', existing[0].id);
-      } else {
-        await supabase.from('attendances').insert([{
-          tanggal: todayStr,
-          nama_karyawan: namaUser,
-          jam_masuk: timeNow,
-          jam_pulang: '',
-          status_kehadiran: 'Hadir',
-          lokasi_maps: mapsUrl,
-          foto_absensi: photoUrl
-        }]);
+      if (accuracy > 70) {
+        Swal.fire('Sinyal GPS Tidak Akurat', `Akurasi terdeteksi ${Math.round(accuracy)}m. Pindah ke area terbuka untuk mencegah Fake GPS.`, 'warning');
+        return;
       }
 
-      Swal.fire('Sukses', `Absen ${jenisAbsen} berhasil dicatat di Supabase! (Jarak: ${Math.round(jarak)}m)`, 'success');
-      document.getElementById('absensiForm').reset();
-      document.getElementById('photoPreview').classList.add('hidden');
-      document.getElementById('photoPlaceholder').classList.remove('hidden');
-      document.getElementById('compressedPhotoData').value = '';
-      loadEmployeeData();
-    } catch (dbErr) {
-      Swal.fire('Database Error', dbErr.message, 'error');
-    }
-  }, (err) => {
-    Swal.fire('Izin Lokasi Ditolak', 'Aktifkan GPS browser untuk melakukan absensi.', 'error');
-  }, { enableHighAccuracy: true, timeout: 15000 });
+      const latSalon = parseFloat(state.settings['Lat Salon'] || -8.583333);
+      const longSalon = parseFloat(state.settings['Long Salon'] || 115.283333);
+      const batasRadius = parseFloat(state.settings['Batas Radius'] || 50);
+      const jarak = calculateDistance(lat, long, latSalon, longSalon);
+
+      if (jarak > batasRadius) {
+        Swal.fire('Akses Ditolak (Di Luar Radius)', `Anda terdeteksi sejauh ${Math.round(jarak)}m dari Salon (Batas Maks: ${batasRadius}m).`, 'error');
+        return;
+      }
+
+      let photoUrl = '';
+      try {
+        const fileName = `absen_${namaUser.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
+        const base64Data = photoData.split(',')[1];
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/jpeg' });
+
+        const { error: uploadErr } = await supabase.storage.from('attendance_photos').upload(fileName, blob, { contentType: 'image/jpeg' });
+        if (uploadErr) throw uploadErr;
+
+        const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+        photoUrl = publicUrlData.publicUrl;
+      } catch (photoErr) {
+        console.warn("Storage upload fallback:", photoErr.message);
+        photoUrl = photoData;
+      }
+
+      const todayStr = formatDateToDDMMYYYY(new Date());
+      const mapsUrl = `https://www.google.com/maps?q=${lat},${long}`;
+
+      try {
+        const { data: existing } = await supabase
+          .from('attendances')
+          .select('*')
+          .eq('tanggal', todayStr)
+          .eq('nama_karyawan', namaUser);
+
+        if (existing && existing.length > 0) {
+          await supabase.from('attendances').update({ jam_pulang: timeNow, foto_absensi: photoUrl }).eq('id', existing[0].id);
+        } else {
+          await supabase.from('attendances').insert([{
+            tanggal: todayStr,
+            nama_karyawan: namaUser,
+            jam_masuk: timeNow,
+            jam_pulang: '',
+            status_kehadiran: 'Hadir',
+            lokasi_maps: mapsUrl,
+            foto_absensi: photoUrl
+          }]);
+        }
+
+        let successMsg = `Absen ${jenisAbsen} berhasil dicatat! (Jarak: ${Math.round(jarak)}m)`;
+
+        if (triggerLembur) {
+          Swal.fire({
+            title: 'Absen Sukses!',
+            text: successMsg + '\n\nSistem mengarahkan Anda ke Form Pengajuan Lembur...',
+            icon: 'success',
+            timer: 2500,
+            showConfirmButton: false
+          }).then(() => {
+            switchEmpView('pengajuan');
+            document.getElementById('formReqJenis').value = 'Lembur';
+            onChangeJenisPengajuan();
+            document.getElementById('formReqTgl1').value = formatDateToYYYYMMDD(new Date());
+            document.getElementById('formReqDurasi').value = durasiLembur;
+            document.getElementById('formReqAlasan').focus();
+          });
+        } else {
+          Swal.fire('Sukses', successMsg, 'success');
+        }
+
+        loadEmployeeData();
+        document.getElementById('absensiForm').reset();
+        document.getElementById('photoPreview').classList.add('hidden');
+        document.getElementById('photoPlaceholder').classList.remove('hidden');
+        document.getElementById('compressedPhotoData').value = '';
+      } catch (dbErr) {
+        Swal.fire('Database Error', dbErr.message, 'error');
+      }
+    },
+    (error) => {
+      Swal.fire('Akses Lokasi Ditolak', 'Aktifkan GPS browser untuk melakukan absensi.', 'error');
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
+function handlePhotoCapture(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const img = new Image();
+    img.onload = function () {
+      const canvas = document.createElement('canvas');
+      const MAX_WIDTH = 800;
+      let width = img.width, height = img.height;
+      if (width > MAX_WIDTH) { height = Math.round((height * MAX_WIDTH) / width); width = MAX_WIDTH; }
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+      document.getElementById('compressedPhotoData').value = dataUrl;
+      const preview = document.getElementById('photoPreview');
+      preview.src = dataUrl;
+      preview.classList.remove('hidden');
+      document.getElementById('photoPlaceholder').classList.add('hidden');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 
 async function triggerGeneratePayroll() {
@@ -1122,11 +1552,58 @@ async function triggerGeneratePayroll() {
       }
     }
 
-    Swal.fire('Selesai', `Slip gaji periode ${formattedPeriod} berhasil digenerate ke Supabase!`, 'success');
+    Swal.fire('Selesai', `Slip gaji periode ${formattedPeriod} berhasil digenerate!`, 'success');
     loadAllData();
   } catch (err) {
     Swal.fire('Error Payroll', err.message, 'error');
   }
+}
+
+function renderEmpPayrollHistory() {
+  const el = document.getElementById('empPayrollList');
+  if (!el) return;
+  const myPayrolls = state.data.payrolls.filter(p => p.nama_karyawan === state.auth.name);
+
+  if (myPayrolls.length === 0) {
+    el.innerHTML = `<div class="text-center text-xs text-gray-400 py-10 bg-gray-50 rounded-2xl border border-gray-100">Belum ada riwayat slip gaji.</div>`;
+    return;
+  }
+
+  let html = '';
+  myPayrolls.forEach(p => {
+    html += `
+    <div class="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100 mb-3 hover:bg-gray-100 transition-colors cursor-pointer shadow-sm" onclick="showEmpSlipDetail('${p.id}')">
+      <div class="flex items-center gap-4">
+        <div class="w-10 h-10 rounded-full bg-brandPink/10 text-brandPink flex items-center justify-center"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+        <div>
+          <p class="text-xs font-bold text-brandText mb-0.5">Periode ${p.periode}</p>
+          <p class="text-[10px] font-bold text-brandPink uppercase">Klik Buka Slip</p>
+        </div>
+      </div>
+      <div class="text-right">
+        <p class="text-[9px] text-gray-400 font-bold uppercase mb-0.5">Total Diterima</p>
+        <p class="text-sm font-black text-brandText">Rp ${Number(p.total_gaji_bersih).toLocaleString('id-ID')}</p>
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html;
+}
+
+function showEmpSlipDetail(id) {
+  const p = state.data.payrolls.find(x => x.id === id);
+  if (!p) return;
+
+  document.getElementById('slip-periode').innerText = p.periode;
+  document.getElementById('slip-nama').innerText = p.nama_karyawan;
+  document.getElementById('slip-gapok').innerText = 'Rp ' + Number(p.gaji_pokok).toLocaleString('id-ID');
+  document.getElementById('slip-tunjangan').innerText = 'Rp ' + Number(p.tunjangan).toLocaleString('id-ID');
+  document.getElementById('slip-uang-lembur').innerText = '+ Rp ' + Number(p.uang_lembur || 0).toLocaleString('id-ID');
+  document.getElementById('slip-pot-telat').innerText = '- Rp ' + Number(p.potongan_telat).toLocaleString('id-ID');
+  document.getElementById('slip-pot-alfa').innerText = '- Rp ' + Number(p.potongan_alfa).toLocaleString('id-ID');
+  document.getElementById('slip-pot-lain').innerText = '- Rp ' + Number(p.potongan_lain || 0).toLocaleString('id-ID');
+  document.getElementById('slip-total').innerText = 'Rp ' + Number(p.total_gaji_bersih).toLocaleString('id-ID');
+
+  openModal('modal-emp-slip');
 }
 
 function downloadSlipPDF() {
@@ -1139,7 +1616,7 @@ function downloadSlipPDF() {
 
 function exportPayrollExcel() {
   if (state.data.payrolls.length === 0) {
-    Swal.fire('Info', 'Belum ada data Payroll di Supabase.', 'info');
+    Swal.fire('Info', 'Belum ada data Payroll di database.', 'info');
     return;
   }
   const ws = XLSX.utils.json_to_sheet(state.data.payrolls);
@@ -1154,6 +1631,127 @@ function populateDropdowns() {
   if (attSelect) attSelect.innerHTML = emps.map(e => `<option value="${e.nama}">${e.nama}</option>`).join('');
   const potSelect = document.getElementById('potEmpSelect');
   if (potSelect) potSelect.innerHTML = emps.map(e => `<option value="${e.nama}">${e.nama}</option>`).join('');
+}
+
+function openModalPotongan() {
+  document.getElementById('formPotongan').reset();
+  populateDropdowns();
+  openModal('modal-potongan');
+}
+
+async function handlePotonganSubmit(e) {
+  e.preventDefault();
+  let tgl = document.getElementById('potTanggal').value;
+  if (!tgl) return;
+
+  let payload = {
+    tanggal: formatDateToDDMMYYYY(new Date(tgl)),
+    nama_karyawan: document.getElementById('potEmpSelect').value,
+    jenis: document.getElementById('potJenis').value,
+    nominal: parseFloat(document.getElementById('potNominal').value || 0),
+    keterangan: document.getElementById('potKeterangan').value
+  };
+
+  Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  try {
+    await supabase.from('deductions').insert([payload]);
+    Swal.fire('Sukses', 'Data potongan berhasil disimpan!', 'success');
+    closeModal('modal-potongan');
+    loadAllData();
+  } catch (err) {
+    Swal.fire('Error', err.message, 'error');
+  }
+}
+
+async function handleEmployeeFormSubmit(e) {
+  e.preventDefault();
+  const formData = new FormData(e.target);
+  const data = Object.fromEntries(formData.entries());
+
+  if (data.tgl_masuk) data.tgl_masuk = formatDateToDDMMYYYY(new Date(data.tgl_masuk));
+  data.gaji_pokok = parseFloat(data.gaji_pokok || 0);
+  data.tunjangan_kehadiran = parseFloat(data.tunjangan_kehadiran || 0);
+  data.utang_hari = parseInt(data.utang_hari || 0);
+
+  const empId = data.id;
+  delete data.id;
+
+  Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  try {
+    if (empId) {
+      await supabase.from('employees').update(data).eq('id', empId);
+    } else {
+      await supabase.from('employees').insert([data]);
+    }
+    Swal.fire('Sukses', 'Data karyawan berhasil disimpan!', 'success');
+    closeModal('modal-employee');
+    loadAllData();
+  } catch (err) {
+    Swal.fire('Error', err.message, 'error');
+  }
+}
+
+function editEmployee(id) {
+  const emp = state.data.employees.find(x => x.id === id);
+  if (!emp) return;
+  const form = document.getElementById('formEmployee');
+  form.elements['id'].value = emp.id;
+  form.elements['nama'].value = emp.nama;
+  form.elements['gaji_pokok'].value = emp.gaji_pokok;
+  form.elements['tunjangan_kehadiran'].value = emp.tunjangan_kehadiran;
+  form.elements['utang_hari'].value = emp.utang_hari || '0';
+  form.elements['status'].value = emp.status;
+  form.elements['peran'].value = emp.peran || 'Karyawan';
+  form.elements['pin'].value = emp.pin;
+
+  if (emp.tgl_masuk) {
+    const p = emp.tgl_masuk.split('/');
+    if (p.length === 3) form.elements['tgl_masuk'].value = `${p[2]}-${p[1]}-${p[0]}`;
+  }
+
+  ['sen', 'sel', 'rab', 'kam', 'jum', 'sab', 'min'].forEach(day => {
+    form.elements[`shift_${day}`].value = emp[`shift_${day}`] || 'L';
+  });
+
+  openModal('modal-employee');
+}
+
+async function handleAttendanceFormSubmit(e) {
+  e.preventDefault();
+  const formData = new FormData(e.target);
+  const data = Object.fromEntries(formData.entries());
+
+  if (data.tanggal) data.tanggal = formatDateToDDMMYYYY(new Date(data.tanggal));
+
+  Swal.fire({ title: 'Menyimpan Absensi...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+  try {
+    await supabase.from('attendances').insert([data]);
+    Swal.fire('Sukses', 'Absensi manual berhasil disimpan!', 'success');
+    closeModal('modal-attendance');
+    loadAllData();
+  } catch (err) {
+    Swal.fire('Error', err.message, 'error');
+  }
+}
+
+function toggleSubStatus() {
+  const attStatus = document.getElementById('attStatus').value;
+  const subContainer = document.getElementById('subStatusContainer');
+  const subSelect = document.getElementById('attSubStatus');
+
+  if (attStatus === 'Sakit') {
+    subSelect.innerHTML = `<option value="Opsi A (Profesional - Tunj. Hangus)">Opsi A (Profesional - Tunj. Hangus)</option><option value="Opsi B (Kekeluargaan - Utang Hari)">Opsi B (Kekeluargaan - Utang Hari)</option>`;
+    subContainer.classList.remove('hidden');
+  } else if (attStatus === 'Telat') {
+    subSelect.innerHTML = `<option value="Kelalaian (<= 30m)">Kelalaian <= 30m (Denda Potongan)</option><option value="Musibah (Rp 0 - Ada Bukti)">Musibah (Rp 0 - Ada Bukti)</option><option value="> 30m (Auto Alfa & Hangus)">Lebih 30m (Auto Alfa & Hangus)</option>`;
+    subContainer.classList.remove('hidden');
+  } else if (attStatus === 'Izin') {
+    subSelect.innerHTML = `<option value="Izin Darurat Resmi">Izin Darurat Resmi</option><option value="Izin Tanpa Alasan">Izin Tanpa Alasan</option>`;
+    subContainer.classList.remove('hidden');
+  } else {
+    subSelect.innerHTML = '';
+    subContainer.classList.add('hidden');
+  }
 }
 
 function populateSettingsForm() {
@@ -1182,6 +1780,38 @@ async function handleSettingsSubmit(e) {
   }
 }
 
+async function handleChangePIN(e) {
+  e.preventDefault();
+  const pinLama = document.getElementById('pinLama').value;
+  const pinBaru = document.getElementById('pinBaru').value;
+  const pinKonf = document.getElementById('pinKonfirmasi').value;
+
+  if (!/^\d{6}$/.test(pinBaru)) { Swal.fire('Format Salah', 'PIN baru WAJIB 6 digit ANGKA!', 'warning'); return; }
+  if (pinBaru !== pinKonf) { Swal.fire('Gagal', 'Konfirmasi PIN Baru tidak cocok!', 'warning'); return; }
+  if (pinLama === pinBaru) { Swal.fire('Info', 'PIN Baru tidak boleh sama dengan PIN Lama.', 'info'); return; }
+
+  Swal.fire({ title: 'Menyimpan PIN...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+  try {
+    const { data: emp, error: fetchErr } = await supabase
+      .from('employees')
+      .select('id, pin')
+      .eq('nama', state.auth.name)
+      .limit(1);
+
+    if (fetchErr || !emp || emp.length === 0) throw new Error('Data akun tidak ditemukan');
+    if (emp[0].pin !== pinLama) throw new Error('PIN Lama yang Anda masukkan salah!');
+
+    await supabase.from('employees').update({ pin: pinBaru }).eq('id', emp[0].id);
+
+    Swal.fire('Berhasil Terkunci!', 'PIN akses berhasil diperbarui.', 'success');
+    document.getElementById('formGantiPin').reset();
+    closeModal('modal-ganti-pin');
+  } catch (err) {
+    Swal.fire('Akses Ditolak', err.message, 'error');
+  }
+}
+
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3;
   const p1 = lat1 * Math.PI / 180;
@@ -1201,30 +1831,11 @@ function toggleSalaryVisibility() {
   ico.classList.replace(sal.classList.contains('unblurred') ? 'fa-eye-slash' : 'fa-eye', sal.classList.contains('unblurred') ? 'fa-eye' : 'fa-eye-slash');
 }
 
-function handlePhotoCapture(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    const img = new Image();
-    img.onload = function () {
-      const canvas = document.createElement('canvas');
-      const MAX_WIDTH = 800;
-      let width = img.width, height = img.height;
-      if (width > MAX_WIDTH) { height = Math.round((height * MAX_WIDTH) / width); width = MAX_WIDTH; }
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-      document.getElementById('compressedPhotoData').value = dataUrl;
-      const preview = document.getElementById('photoPreview');
-      preview.src = dataUrl;
-      preview.classList.remove('hidden');
-      document.getElementById('photoPlaceholder').classList.add('hidden');
-    };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
+function switchEmpView(view) {
+  document.querySelectorAll('.emp-view-section').forEach(el => el.classList.remove('active'));
+  document.getElementById(`emp-view-${view}`).classList.add('active');
+  document.querySelectorAll('#app-employee nav button').forEach(b => b.className = 'flex flex-col items-center gap-1 text-gray-400 hover:text-brandPink transition-colors w-1/3');
+  document.getElementById(`empNav-${view}`).className = 'flex flex-col items-center gap-1 text-brandPink transition-colors w-1/3';
 }
 
 function openModal(id) { const m = document.getElementById(id); if (m) m.classList.remove('hidden'); }

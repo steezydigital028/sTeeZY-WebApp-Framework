@@ -1,6 +1,6 @@
 // File: script.js
-const SUPABASE_URL = "https://hbqsyfnommdzwwbgsqgx.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_PljrNIdoeriyWPcJHdkmfg_Z5mh5T-F";
+const SUPABASE_URL = "https://YOUR_PROJECT_ID.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -340,6 +340,8 @@ async function fetchSupabaseSettings() {
 }
 
 function switchView(viewId) {
+  toggleSidebar(false);
+
   document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
   document.getElementById(`view-${viewId}`).classList.add('active');
   state.view = viewId;
@@ -2340,6 +2342,23 @@ function formatDateToYYYYMMDD(d) {
 
 function formatDateToDDMMYYYY(d) {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
+
+function toggleSidebar(forceState) {
+  const sidebar = document.getElementById('ownerSidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar || !backdrop) return;
+
+  const isOpen = !sidebar.classList.contains('-translate-x-full');
+  const shouldOpen = typeof forceState === 'boolean' ? forceState : !isOpen;
+
+  if (shouldOpen) {
+    sidebar.classList.remove('-translate-x-full');
+    backdrop.classList.remove('hidden');
+  } else {
+    sidebar.classList.add('-translate-x-full');
+    backdrop.classList.add('hidden');
+  }
 }
 
 window.onload = init;

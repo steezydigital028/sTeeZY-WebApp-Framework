@@ -1,0 +1,767 @@
+<!-- File: index.html -->
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Ara Beauty - Enterprise HRIS Portal</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brandBg: '#feffff',
+            brandText: '#023047',
+            brandPink: '#ff8fa3',
+            brandPinkDark: '#ff758f',
+            brandGray: '#f8f9fa'
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'San Francisco', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'sans-serif']
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    body { background-color: #f3f4f6; color: #023047; }
+    .glass-panel { background: rgba(254, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255, 143, 163, 0.2); }
+    .btn-pink { background: linear-gradient(135deg, #ff8fa3 0%, #ff758f 100%); color: white; transition: all 0.3s ease; }
+    .btn-pink:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(255, 117, 143, 0.3); }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: #ff8fa3; }
+    .view-section { display: none; animation: fadeIn 0.4s ease; }
+    .view-section.active { display: block; }
+    .emp-view-section { display: none; animation: fadeIn 0.3s ease; }
+    .emp-view-section.active { display: block; }
+    .blur-text { filter: blur(6px); user-select: none; transition: filter 0.3s ease; }
+    .blur-text.unblurred { filter: blur(0); }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="w-full h-screen font-sans antialiased text-brandText selection:bg-brandPink selection:text-white bg-gray-50 flex flex-col overflow-hidden">
+
+  <div id="app-login" class="absolute inset-0 z-50 flex items-center justify-center bg-brandBg/80 backdrop-blur-md px-4">
+    <div class="glass-panel p-8 rounded-3xl shadow-2xl w-full max-w-sm text-center">
+      <div class="w-20 h-20 rounded-full bg-brandPink mx-auto flex items-center justify-center text-white font-bold shadow-lg mb-4 text-3xl">
+        <i class="fa-solid fa-spa"></i>
+      </div>
+      <h1 class="text-2xl font-bold text-brandText mb-1">Ara Beauty</h1>
+      <p class="text-xs text-gray-500 mb-6">Enterprise HRIS Supabase Portal</p>
+
+      <div class="flex bg-gray-100 p-1 rounded-2xl mb-6 text-xs font-bold">
+        <button type="button" onclick="switchLoginMode('pin')" id="tabLoginPin" class="flex-1 py-2 rounded-xl bg-white shadow-sm text-brandText transition-all">PIN Karyawan</button>
+        <button type="button" onclick="switchLoginMode('auth')" id="tabLoginAuth" class="flex-1 py-2 rounded-xl text-gray-400 hover:text-brandText transition-all">Supabase Auth</button>
+      </div>
+      
+      <!-- Mode 1: Quick PIN Login -->
+      <form id="formLoginPin" onsubmit="handleLoginPIN(event)">
+        <div class="mb-6 text-left">
+          <label class="block mb-2 font-medium text-xs text-gray-500 uppercase tracking-wider">PIN Akses (6 Digit)</label>
+          <input type="password" id="loginPin" required maxlength="6" pattern="[0-9]{6}" placeholder="••••••" class="w-full border-2 border-gray-100 rounded-2xl px-5 py-3 outline-none focus:border-brandPink text-center text-2xl tracking-widest font-bold bg-white transition-all shadow-sm">
+        </div>
+        <button type="submit" class="w-full btn-pink py-3.5 rounded-2xl font-bold shadow-lg text-sm">Masuk via PIN</button>
+      </form>
+
+      <!-- Mode 2: Supabase Email/Password Auth -->
+      <form id="formLoginAuth" onsubmit="handleLoginAuth(event)" class="hidden space-y-4 text-left">
+        <div>
+          <label class="block mb-1 font-medium text-xs text-gray-500 uppercase tracking-wider">Email Akun</label>
+          <input type="email" id="authEmail" placeholder="admin@arabeauty.com" class="w-full border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:border-brandPink bg-white text-sm">
+        </div>
+        <div>
+          <label class="block mb-1 font-medium text-xs text-gray-500 uppercase tracking-wider">Kata Sandi</label>
+          <input type="password" id="authPassword" placeholder="••••••••" class="w-full border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:border-brandPink bg-white text-sm">
+        </div>
+        <button type="submit" class="w-full btn-pink py-3.5 rounded-2xl font-bold shadow-lg text-sm">Masuk Supabase Auth</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-employee" class="hidden absolute inset-0 md:inset-y-0 md:left-1/2 md:-translate-x-1/2 md:w-[420px] bg-gray-50 flex flex-col shadow-2xl overflow-hidden z-40 border-x border-gray-200">
+    <header class="bg-white px-6 pt-8 pb-4 shadow-sm rounded-b-3xl z-10 relative">
+      <div class="flex justify-between items-center gap-3">
+        <div class="flex-1 min-w-0">
+          <p class="text-[10px] text-gray-400 font-semibold uppercase tracking-widest">Selamat Datang,</p>
+          <h2 class="text-lg font-black text-brandText truncate w-full" id="empGreetingName">Karyawan</h2>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="showNotifModal()" class="relative w-10 h-10 shrink-0 rounded-full bg-gray-50 flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-brandPink transition-colors shadow-sm border border-gray-100" title="Notifikasi">
+            <i class="fa-solid fa-bell"></i>
+            <span id="notifBadge" class="hidden absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full animate-pulse"></span>
+          </button>
+          <button onclick="openModal('modal-ganti-pin')" class="w-10 h-10 shrink-0 rounded-full bg-gray-50 flex items-center justify-center text-gray-500 hover:bg-gray-200 hover:text-brandText transition-colors shadow-sm border border-gray-100" title="Ganti PIN Akses">
+            <i class="fa-solid fa-key"></i>
+          </button>
+          <button onclick="logout()" class="w-10 h-10 shrink-0 rounded-full bg-red-50 flex items-center justify-center text-red-500 hover:bg-red-100 transition-colors shadow-sm border border-red-100">
+            <i class="fa-solid fa-power-off"></i>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="flex-1 overflow-y-auto p-5 pb-24" id="empMainContent">
+      <section id="emp-view-home" class="emp-view-section active space-y-5">
+        
+        <div class="bg-gradient-to-br from-brandText to-gray-800 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+          <div class="absolute -right-10 -top-10 w-32 h-32 bg-white/10 rounded-full blur-2xl"></div>
+          <div class="flex justify-between items-start mb-2 relative z-10">
+            <span class="text-xs font-semibold text-gray-300 uppercase tracking-widest">Estimasi Gaji Bulan Ini</span>
+            <button onclick="toggleSalaryVisibility()" class="text-gray-300 hover:text-white"><i id="eyeIconSalary" class="fa-solid fa-eye-slash"></i></button>
+          </div>
+          <div class="relative z-10">
+            <span class="text-3xl font-black blur-text" id="empRealtimeSalary">Rp 0</span>
+          </div>
+          <div class="mt-4 pt-4 border-t border-white/20 flex justify-between items-center text-xs text-gray-300 relative z-10">
+            <div>Potongan: <span id="empCurrentDeduction" class="font-bold text-rose-300 blur-text">Rp 0</span></div>
+            <div class="flex items-center gap-2">
+              <div class="bg-rose-500/90 text-white px-3 py-1 rounded-full font-bold shadow-sm hidden" id="empUtangHariBadge"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Utang: 0</div>
+            </div>
+          </div>
+          
+          <button onclick="openModal('modal-emp-payroll'); renderEmpPayrollHistory();" class="w-full mt-4 bg-white/10 hover:bg-white/20 text-white py-2.5 rounded-xl text-xs font-bold transition-all border border-white/20 flex items-center justify-center gap-2 relative z-10 backdrop-blur-sm shadow-sm">
+            <i class="fa-solid fa-file-invoice-dollar"></i> Lihat Riwayat Slip Gaji
+          </button>
+        </div>
+
+        <div class="bg-white rounded-3xl p-5 shadow-sm border border-gray-100 flex items-center justify-between">
+          <div class="flex items-center gap-4">
+            <div class="w-12 h-12 rounded-full bg-brandPink/10 text-brandPink flex items-center justify-center text-xl shadow-inner">
+              <i class="fa-solid fa-calendar-day"></i>
+            </div>
+            <div>
+              <p class="text-xs text-gray-400 font-bold">Shift Hari Ini</p>
+              <p class="text-lg font-black text-brandText" id="empTodayShift">Memuat...</p>
+            </div>
+          </div>
+        </div>
+
+        <section id="component-form" class="bg-white rounded-3xl p-5 shadow-sm border border-gray-100 mt-6 relative overflow-hidden">
+          <h2 class="text-lg font-bold text-brandText mb-1">Catat Kehadiran</h2>
+          <p class="text-[10px] text-gray-500 mb-4">Wajib selfie di salon & terverifikasi GPS Cloud Supabase.</p>
+
+          <form id="absensiForm" onsubmit="submitAbsensi(event)" class="space-y-4">
+            <div id="formAbsensiWrapper" class="space-y-4">
+              <div>
+                <label class="block text-[10px] font-bold text-gray-500 mb-1.5 uppercase tracking-wide">Jenis Absen</label>
+                <div class="grid grid-cols-1 gap-3">
+                  <label class="cursor-pointer relative" id="lblAbsenMasuk">
+                    <input type="radio" name="jenisAbsen" value="Masuk" id="radioMasuk" checked class="peer sr-only">
+                    <div class="rounded-2xl border-2 border-gray-100 p-3 text-center peer-checked:border-brandPink peer-checked:bg-brandPink/5 transition-all text-gray-400 peer-checked:text-brandText font-bold shadow-sm">
+                      <i class="fa-solid fa-right-to-bracket mb-1 text-lg peer-checked:text-brandPink"></i><br><span class="text-xs">Masuk</span>
+                    </div>
+                  </label>
+                  <label class="cursor-pointer relative hidden" id="lblAbsenPulang">
+                    <input type="radio" name="jenisAbsen" value="Pulang" id="radioPulang" class="peer sr-only">
+                    <div class="rounded-2xl border-2 border-gray-100 p-3 text-center peer-checked:border-brandPink peer-checked:bg-brandPink/5 transition-all text-gray-400 peer-checked:text-brandText font-bold shadow-sm">
+                      <i class="fa-solid fa-right-from-bracket mb-1 text-lg peer-checked:text-brandPink"></i><br><span class="text-xs">Pulang</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-[10px] font-bold text-gray-500 mb-1.5 uppercase tracking-wide">Bukti Foto</label>
+                <label for="cameraInput" class="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-200 rounded-2xl cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors group relative overflow-hidden">
+                  <div id="photoPlaceholder" class="flex flex-col items-center justify-center pt-5 pb-6">
+                    <i class="fa-solid fa-camera text-3xl text-gray-400 group-hover:text-brandPink transition-colors mb-2"></i>
+                    <p class="text-xs font-bold text-gray-500">Buka Kamera HP</p>
+                  </div>
+                  <img id="photoPreview" class="absolute inset-0 w-full h-full object-cover hidden" alt="Hasil Foto">
+                </label>
+                <input type="file" id="cameraInput" accept="image/*" capture="user" class="hidden" onchange="handlePhotoCapture(event)">
+                <input type="hidden" id="compressedPhotoData">
+              </div>
+
+              <button type="submit" class="w-full bg-gradient-to-r from-brandPink to-brandPinkDark text-white py-3.5 rounded-2xl font-bold shadow-lg shadow-brandPink/30 hover:scale-[1.02] transition-transform flex items-center justify-center gap-2 text-sm">
+                <i class="fa-solid fa-location-dot"></i> Kirim Absensi & Lokasi GPS
+              </button>
+            </div>
+
+            <div id="absenCompletedState" class="hidden bg-emerald-50 border border-emerald-200 rounded-3xl p-6 text-center shadow-sm">
+              <div class="w-16 h-16 rounded-full bg-emerald-100 text-emerald-500 flex items-center justify-center mx-auto mb-3 shadow-inner text-3xl">
+                <i class="fa-solid fa-check"></i>
+              </div>
+              <p class="text-sm font-black text-emerald-800">Absensi Selesai!</p>
+              <p class="text-[11px] font-medium text-emerald-600 mt-1">Anda sudah melakukan absen masuk dan pulang hari ini.</p>
+            </div>
+          </form>
+        </section>
+
+        <h3 class="text-sm font-bold text-gray-800 ml-1 mt-6 mb-3">Riwayat Absensi Saya</h3>
+        <div class="space-y-3" id="empAttendanceHistoryList"></div>
+      </section>
+
+      <section id="emp-view-jadwal" class="emp-view-section">
+        <h3 class="text-lg font-bold text-brandText mb-4 ml-1">Jadwal 7 Hari Kedepan</h3>
+        <div class="space-y-3" id="empJadwalList"></div>
+      </section>
+
+      <section id="emp-view-pengajuan" class="emp-view-section">
+        <h3 class="text-lg font-bold text-brandText mb-4 ml-1">Form Pengajuan Operasional</h3>
+        <div class="bg-white rounded-3xl p-5 shadow-sm border border-gray-100 mb-6">
+           <form onsubmit="handlePengajuanJadwal(event)">
+              <div class="space-y-3 text-sm">
+                 <div>
+                    <label class="block text-xs font-bold text-gray-500 mb-1">Jenis Pengajuan</label>
+                    <select id="formReqJenis" onchange="onChangeJenisPengajuan()" class="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brandPink bg-gray-50 font-semibold text-brandText">
+                        <option value="Tukar Waktu Shift" selected>Tukar Waktu Shift</option>
+                        <option value="Tukar Hari Libur">Tukar Hari Libur</option>
+                        <option value="Lembur">Pengajuan Lembur</option>
+                    </select>
+                 </div>
+                 <div>
+                    <label id="lblReqTgl1" class="block text-xs font-bold text-gray-500 mb-1">Tanggal Shift</label>
+                    <input type="date" id="formReqTgl1" required onchange="checkCurrentShift()" class="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brandPink bg-gray-50">
+                    <p id="currentShiftInfo" class="text-[10px] text-brandPink font-bold mt-1.5 hidden"></p>
+                 </div>
+                 
+                 <div id="wrapShiftTujuan" class="block">
+                    <label class="block text-xs font-bold text-gray-500 mb-1">Tukar Ke Shift</label>
+                    <select id="formReqShiftTujuan" class="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brandPink bg-gray-50 font-semibold text-brandText">
+                        <option value="P">Pagi (08:00 - 18:00)</option>
+                        <option value="S">Siang (12:00 - 22:00)</option>
+                    </select>
+                 </div>
+
+                 <div id="wrapTgl2" class="hidden">
+                    <label class="block text-xs font-bold text-gray-500 mb-1">Tukar Ke Tanggal</label>
+                    <input type="date" id="formReqTgl2" class="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brandPink bg-gray-50">
+                 </div>
+                 
+                 <div id="wrapLembur" class="hidden">
+                    <label class="block text-xs font-bold text-gray-500 mb-1">Durasi Lembur (Jam)</label>
+                    <input type="number" step="0.5" id="formReqDurasi" placeholder="Contoh: 2" class="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brandPink bg-gray-50 font-bold text-brandText">
+                 </div>
+
+                 <div>
+                    <label class="block text-xs font-bold text-gray-500 mb-1">Alasan / Keterangan</label>
+                    <textarea id="formReqAlasan" required rows="2" class="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brandPink bg-gray-50 placeholder-gray-400" placeholder="Contoh: Tukar shift siang dengan si A..."></textarea>
+                 </div>
+                 <button type="submit" class="w-full btn-pink py-2.5 rounded-xl font-bold mt-2 shadow-sm text-sm">Kirim Pengajuan</button>
+              </div>
+           </form>
+        </div>
+
+        <h3 class="text-sm font-bold text-gray-800 ml-1 mb-3">Riwayat Pengajuan</h3>
+        <div class="space-y-3" id="empReqHistoryList"></div>
+      </section>
+    </main>
+
+    <nav class="absolute bottom-0 w-full bg-white border-t border-gray-100 px-4 py-3 pb-6 flex justify-around items-center shadow-[0_-4px_20px_rgba(0,0,0,0.03)] z-20">
+      <button onclick="switchEmpView('home')" id="empNav-home" class="flex flex-col items-center gap-1 text-brandPink transition-colors w-1/3">
+        <i class="fa-solid fa-house text-xl"></i><span class="text-[10px] font-bold">Beranda</span>
+      </button>
+      <button onclick="switchEmpView('jadwal')" id="empNav-jadwal" class="flex flex-col items-center gap-1 text-gray-400 hover:text-brandPink transition-colors w-1/3">
+        <i class="fa-solid fa-calendar-days text-xl"></i><span class="text-[10px] font-bold">Jadwal</span>
+      </button>
+      <button onclick="switchEmpView('pengajuan')" id="empNav-pengajuan" class="flex flex-col items-center gap-1 text-gray-400 hover:text-brandPink transition-colors w-1/3">
+        <i class="fa-solid fa-code-pull-request text-xl"></i><span class="text-[10px] font-bold">Pengajuan</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="app-owner" class="hidden absolute inset-0 z-30 flex">
+    <aside class="w-64 bg-white shadow-xl z-20 hidden md:flex flex-col border-r border-gray-100">
+      <div class="p-6 border-b border-gray-100 flex items-center gap-3">
+        <div class="w-10 h-10 rounded-full bg-brandPink flex items-center justify-center text-white font-bold shadow-md"><i class="fa-solid fa-spa"></i></div>
+        <div><h1 class="text-lg font-bold text-brandText tracking-tight">Ara Beauty</h1><p class="text-xs text-gray-500">Supabase Admin</p></div>
+      </div>
+      <nav class="flex-1 p-4 space-y-1 overflow-y-auto" id="navMenu"></nav>
+      <div class="p-4 border-t border-gray-100 text-center">
+        <button onclick="logout()" class="w-full py-2 bg-red-50 text-red-500 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors"><i class="fa-solid fa-power-off mr-2"></i>Logout</button>
+      </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col h-screen overflow-hidden">
+      <header class="bg-white/80 backdrop-blur-md shadow-sm z-10 px-6 py-4 flex justify-between items-center md:hidden">
+        <div class="flex items-center gap-2 font-bold text-brandPink"><i class="fa-solid fa-spa"></i> Ara Beauty</div>
+        <div class="flex items-center gap-3"><button onclick="logout()" class="text-red-400"><i class="fa-solid fa-power-off"></i></button></div>
+      </header>
+
+      <div class="flex-1 overflow-y-auto p-4 md:p-8" id="mainContent">
+        
+        <section id="view-dashboard" class="view-section active">
+          <div class="flex justify-between items-end mb-6">
+            <div>
+              <h2 class="text-2xl font-bold text-brandText">Executive Dashboard</h2>
+              <p class="text-xs text-gray-500 mt-1">Pusat kendali performa bisnis & kedisiplinan (Supabase Live).</p>
+            </div>
+            <button onclick="renderDashboardAnalytics()" class="w-10 h-10 rounded-xl bg-white border border-gray-100 shadow-sm text-brandPink hover:bg-brandPink hover:text-white transition-all flex items-center justify-center" title="Refresh Dashboard"><i class="fa-solid fa-rotate-right"></i></button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8" id="dashboardCards"></div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+              <h3 class="text-sm font-bold text-brandText mb-1"><i class="fa-solid fa-chart-pie mr-2 text-brandPink"></i>Tingkat Kedisiplinan</h3>
+              <p class="text-[10px] text-gray-400 mb-4">Persentase kehadiran staf bulan ini</p>
+              <div class="relative flex-1 flex justify-center min-h-[250px] max-h-[250px]">
+                <canvas id="chartDisiplin"></canvas>
+              </div>
+            </div>
+            
+            <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+              <h3 class="text-sm font-bold text-brandText mb-1"><i class="fa-solid fa-chart-simple mr-2 text-emerald-500"></i>Arus Kas Karyawan</h3>
+              <p class="text-[10px] text-gray-400 mb-4">Estimasi Beban Gaji vs Denda/Kasbon Masuk</p>
+              <div class="relative flex-1 flex justify-center min-h-[250px] max-h-[250px]">
+                <canvas id="chartKeuangan"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <h3 class="text-sm font-bold text-brandText mb-4 flex items-center gap-2"><i class="fa-solid fa-trophy text-amber-400"></i> Top Performers (Terdisiplin)</h3>
+              <div id="leaderboardTop" class="space-y-3"></div>
+            </div>
+            <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <h3 class="text-sm font-bold text-brandText mb-4 flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation text-rose-500"></i> Butuh Perhatian (Sering Telat/Alfa)</h3>
+              <div id="leaderboardBottom" class="space-y-3"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-employee" class="view-section">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-brandText">Data Karyawan</h2>
+            <button onclick="openAddEmployeeModal()" class="btn-pink px-4 py-2 rounded-xl text-sm font-semibold"><i class="fa-solid fa-plus mr-2"></i>Tambah</button>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm" id="table-employee"></table>
+          </div>
+        </section>
+
+        <section id="view-shift" class="view-section">
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-bold text-brandText">Kalender Shift Karyawan</h2>
+              <p class="text-xs text-gray-500">Klik header tanggal untuk melihat status indikator kecukupan jadwal operasional.</p>
+            </div>
+            <div class="flex items-center gap-2 text-xs font-semibold bg-white p-2 rounded-xl shadow-sm border border-gray-100">
+              <span class="text-gray-400 mr-1">Shift:</span>
+              <span class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">P = Pagi</span>
+              <span class="px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">S = Siang</span>
+              <span class="px-2 py-1 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">L = Libur</span>
+            </div>
+          </div>
+          <div class="glass-panel p-4 rounded-2xl mb-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-2">
+              <button onclick="shiftNavPrev()" class="px-3 py-2 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-xs font-semibold shadow-sm"><i class="fa-solid fa-chevron-left mr-1"></i> Sebelumnya</button>
+              <button onclick="shiftNavToday()" class="px-3 py-2 bg-brandPink/10 text-brandPink rounded-xl font-bold text-xs">Hari Ini</button>
+              <button onclick="shiftNavNext()" class="px-3 py-2 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-xs font-semibold shadow-sm">Berikutnya <i class="fa-solid fa-chevron-right ml-1"></i></button>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs font-bold text-brandPink"><i class="fa-solid fa-calendar-alt mr-1"></i> Mulai Tanggal:</span>
+              <input type="date" id="shiftStartDate" onchange="onShiftDateChange(this.value)" class="border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold outline-none bg-white focus:border-brandPink">
+              <div class="flex bg-gray-100 p-1 rounded-xl text-xs">
+                <button onclick="setShiftRange(7)" id="btnRange7" class="px-3 py-1 rounded-lg font-bold bg-white shadow-sm text-brandText">7 Hari</button>
+                <button onclick="setShiftRange(14)" id="btnRange14" class="px-3 py-1 rounded-lg font-bold text-gray-500 hover:text-brandText transition-colors">14 Hari</button>
+              </div>
+            </div>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm border-collapse" id="table-shift"></table>
+          </div>
+        </section>
+
+        <section id="view-cuti" class="view-section">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+               <h2 class="text-2xl font-bold text-brandText">Perubahan Jadwal</h2>
+               <p class="text-xs text-gray-500">Persetujuan Tukar Waktu Shift atau Tukar Libur Karyawan.</p>
+            </div>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm" id="table-cuti"></table>
+          </div>
+        </section>
+
+        <section id="view-lembur" class="view-section">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+               <h2 class="text-2xl font-bold text-brandText">Persetujuan Lembur</h2>
+               <p class="text-xs text-gray-500">Persetujuan pengajuan jam kerja ekstra (Overtime) karyawan.</p>
+            </div>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm" id="table-lembur"></table>
+          </div>
+        </section>
+
+        <section id="view-attendance" class="view-section">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-brandText">Catatan Absensi</h2>
+            <button onclick="openModal('modal-attendance')" class="btn-pink px-4 py-2 rounded-xl text-sm font-semibold"><i class="fa-solid fa-clock mr-2"></i>Input Absen</button>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm" id="table-attendance"></table>
+          </div>
+        </section>
+
+        <section id="view-potongan" class="view-section">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+              <h2 class="text-2xl font-bold text-brandText">Kasbon & Potongan Kasir</h2>
+              <p class="text-xs text-gray-500">Rekap minus kasir, kasbon, atau denda yang dipotong saat Payroll.</p>
+            </div>
+            <button onclick="openModalPotongan()" class="btn-pink px-4 py-2 rounded-xl text-sm font-semibold"><i class="fa-solid fa-plus mr-2"></i>Tambah Data</button>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm" id="table-potongan"></table>
+          </div>
+        </section>
+
+        <section id="view-payroll" class="view-section">
+          <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <h2 class="text-2xl font-bold text-brandText">Payroll & Slip Gaji</h2>
+            <div class="flex flex-wrap items-center gap-2">
+              <input type="month" id="payrollPeriod" class="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-brandPink">
+              <button onclick="triggerGeneratePayroll()" class="btn-pink px-4 py-2 rounded-xl text-sm font-semibold shadow-sm"><i class="fa-solid fa-calculator mr-2"></i>Generate</button>
+              <button onclick="exportPayrollExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-sm transition-colors"><i class="fa-solid fa-file-excel mr-2"></i>Excel</button>
+            </div>
+          </div>
+          <div class="glass-panel rounded-2xl p-1 overflow-x-auto shadow-sm">
+            <table class="w-full text-left text-sm" id="table-payroll"></table>
+          </div>
+        </section>
+
+        <section id="view-settings" class="view-section">
+          <div class="flex justify-between items-end mb-6">
+            <div>
+              <h2 class="text-2xl font-bold text-brandText">Pengaturan Sistem Supabase</h2>
+              <p class="text-xs text-gray-500 mt-1">Konfigurasi operasional, koordinat salon, radius GPS, dan API Cloud.</p>
+            </div>
+          </div>
+
+          <form id="formSettings" onsubmit="handleSettingsSubmit(event)">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              
+              <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col hover:shadow-md transition-shadow">
+                <div class="w-10 h-10 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center mb-4"><i class="fa-solid fa-map-location-dot"></i></div>
+                <h3 class="text-sm font-bold text-brandText mb-4">Geofencing & Lokasi GPS</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Latitude Salon</label>
+                    <input type="text" name="Lat Salon" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400 bg-gray-50 font-mono">
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Longitude Salon</label>
+                    <input type="text" name="Long Salon" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400 bg-gray-50 font-mono">
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Batas Radius Absen (Meter)</label>
+                    <input type="number" name="Batas Radius" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400 bg-gray-50 font-bold text-blue-600">
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col hover:shadow-md transition-shadow">
+                <div class="w-10 h-10 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center mb-4"><i class="fa-solid fa-users-gear"></i></div>
+                <h3 class="text-sm font-bold text-brandText mb-4">Operasional & Kuota Shift</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Syarat Minimal Staff Pagi</label>
+                    <input type="number" name="Min Staff Pagi" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400 bg-gray-50">
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Syarat Minimal Staff Siang</label>
+                    <input type="number" name="Min Staff Siang" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400 bg-gray-50">
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col hover:shadow-md transition-shadow md:col-span-2">
+                <div class="w-10 h-10 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center mb-4"><i class="fa-solid fa-shield-halved"></i></div>
+                <h3 class="text-sm font-bold text-brandText mb-4">Keamanan & Akses Master</h3>
+                <div class="space-y-4">
+                  <div class="w-full md:w-1/2">
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">PIN Master Owner (6 Digit)</label>
+                    <input type="password" name="PIN Owner Default" maxlength="6" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-lg tracking-[0.5em] font-black text-center outline-none focus:border-rose-400 bg-gray-50 text-rose-500" placeholder="••••••">
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="flex justify-end pb-12">
+              <button type="submit" class="bg-brandText hover:bg-gray-800 text-white px-8 py-3.5 rounded-2xl font-bold shadow-lg shadow-gray-400/30 transition-transform hover:scale-[1.02] flex items-center gap-2">
+                <i class="fa-solid fa-cloud-arrow-up"></i> Simpan Pengaturan Supabase
+              </button>
+            </div>
+          </form>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal Karyawan -->
+  <div id="modal-employee" class="fixed inset-0 bg-brandText/30 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 my-8">
+      <div class="flex justify-between items-center mb-6">
+        <h3 class="text-lg font-bold text-brandText" id="modalEmpTitle">Form Karyawan</h3>
+        <button onclick="closeModal('modal-employee')" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <form id="formEmployee" onsubmit="handleEmployeeFormSubmit(event)">
+        <input type="hidden" name="id">
+        <div class="space-y-4 text-sm max-h-[60vh] overflow-y-auto pr-2">
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Nama Lengkap</label><input type="text" name="nama" required class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink"></div>
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Tanggal Masuk</label><input type="date" name="tgl_masuk" required class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink"></div>
+          
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="block mb-1 font-medium text-xs text-gray-500">Gaji Pokok</label><input type="number" name="gaji_pokok" required class="w-full border rounded-xl px-3 py-2 bg-gray-50 outline-none focus:border-brandPink"></div>
+            <div><label class="block mb-1 font-medium text-xs text-gray-500">Tunjangan Kehadiran</label><input type="number" name="tunjangan_kehadiran" required class="w-full border rounded-xl px-3 py-2 bg-gray-50 outline-none focus:border-brandPink"></div>
+          </div>
+          
+          <div>
+            <label class="block mb-1 font-medium text-xs text-rose-500">Utang Hari Kerja (Akibat Sakit Opsi B)</label>
+            <input type="number" name="utang_hari" placeholder="0" class="w-full border border-rose-200 rounded-xl px-4 py-2 bg-rose-50 outline-none focus:border-rose-400 font-bold text-rose-600">
+          </div>
+          
+          <div class="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+            <h4 class="font-bold text-blue-800 mb-2 text-xs uppercase tracking-widest">Akses Login Mobile</h4>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="block mb-1 font-medium text-xs">Peran</label>
+                   <select name="peran" class="w-full border rounded-xl px-3 py-2 bg-white outline-none">
+                     <option value="Karyawan">Karyawan</option>
+                     <option value="Owner">Owner</option>
+                   </select></div>
+              <div><label class="block mb-1 font-medium text-xs">PIN (6 Digit)</label>
+                   <input type="password" name="pin" required maxlength="6" pattern="[0-9]{6}" class="w-full border rounded-xl px-3 py-2 bg-white text-center font-bold tracking-widest outline-none"></div>
+            </div>
+          </div>
+
+          <div>
+            <label class="block mb-1 font-medium text-xs text-gray-500">Status Pekerjaan</label>
+            <select name="status" class="w-full border rounded-xl px-4 py-2 bg-gray-50 mb-2 outline-none"><option value="Aktif">Aktif</option><option value="Nonaktif">Nonaktif</option></select>
+            
+            <label class="block mb-2 font-bold text-brandText border-t pt-4 text-xs">Pola Shift Rutin Mingguan</label>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100"><span class="font-semibold w-12">Senin</span><select name="shift_sen" class="border outline-none rounded p-1"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100"><span class="font-semibold w-12">Selasa</span><select name="shift_sel" class="border outline-none rounded p-1"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100"><span class="font-semibold w-12">Rabu</span><select name="shift_rab" class="border outline-none rounded p-1"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100"><span class="font-semibold w-12">Kamis</span><select name="shift_kam" class="border outline-none rounded p-1"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100"><span class="font-semibold w-12">Jumat</span><select name="shift_jum" class="border outline-none rounded p-1"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100"><span class="font-semibold w-12">Sabtu</span><select name="shift_sab" class="border outline-none rounded p-1"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+              <div class="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100 col-span-2"><span class="font-semibold w-12">Minggu</span><select name="shift_min" class="border outline-none rounded p-1 w-full"><option value="L">Libur</option><option value="P">Pagi</option><option value="S">Siang</option></select></div>
+            </div>
+          </div>
+        </div>
+        <button type="submit" class="w-full btn-pink py-3 rounded-xl font-bold mt-6 shadow-lg text-sm">Simpan ke Supabase</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Manual Attendance -->
+  <div id="modal-attendance" class="fixed inset-0 bg-brandText/30 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6">
+      <div class="flex justify-between items-center mb-6">
+        <h3 class="text-lg font-bold text-brandText">Input Absensi Manual</h3>
+        <button onclick="closeModal('modal-attendance')" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <form id="formAttendance" onsubmit="handleAttendanceFormSubmit(event)">
+        <div class="space-y-4 text-sm">
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Tanggal</label><input type="date" name="tanggal" required class="w-full border rounded-xl px-4 py-2 bg-gray-50"></div>
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Nama Karyawan</label><select name="nama_karyawan" id="attEmpSelect" class="w-full border rounded-xl px-4 py-2 bg-gray-50"></select></div>
+          <div class="grid grid-cols-2 gap-4">
+             <div><label class="block mb-1 font-medium text-xs text-gray-500">Jam Masuk</label><input type="time" name="jam_masuk" class="w-full border rounded-xl px-4 py-2 bg-gray-50"></div>
+             <div><label class="block mb-1 font-medium text-xs text-gray-500">Jam Pulang</label><input type="time" name="jam_pulang" class="w-full border rounded-xl px-4 py-2 bg-gray-50"></div>
+          </div>
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Status Kehadiran</label>
+               <select name="status_kehadiran" id="attStatus" onchange="toggleSubStatus()" class="w-full border rounded-xl px-4 py-2 bg-gray-50">
+                 <option value="Hadir">Hadir</option><option value="Telat">Telat</option><option value="Sakit">Sakit</option><option value="Izin">Izin</option><option value="Alfa">Alfa</option>
+               </select>
+          </div>
+          <div id="subStatusContainer" class="hidden">
+               <label class="block mb-1 font-medium text-xs text-gray-500">Sub-Status (SOP)</label>
+               <select name="sub_status" id="attSubStatus" class="w-full border rounded-xl px-4 py-2 bg-gray-50"></select>
+          </div>
+          <button type="submit" class="w-full btn-pink py-3 rounded-xl font-bold mt-4 shadow-lg text-sm">Submit Absen</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Potongan / Kasbon -->
+  <div id="modal-potongan" class="fixed inset-0 bg-brandText/30 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6">
+      <div class="flex justify-between items-center mb-6">
+        <h3 class="text-lg font-bold text-brandText">Input Kasbon & Potongan</h3>
+        <button onclick="closeModal('modal-potongan')" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <form id="formPotongan" onsubmit="handlePotonganSubmit(event)">
+        <div class="space-y-4 text-sm">
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Tanggal Pencatatan</label><input type="date" id="potTanggal" required class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink"></div>
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Nama Karyawan</label><select id="potEmpSelect" required class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink"></select></div>
+          <div>
+             <label class="block mb-1 font-medium text-xs text-gray-500">Jenis Potongan</label>
+             <select id="potJenis" required class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink">
+               <option value="Selisih/Minus Kasir">Selisih/Minus Kasir</option>
+               <option value="Kasbon/Pinjaman">Kasbon / Pinjaman</option>
+               <option value="Denda SOP / Ganti Rugi">Denda SOP / Ganti Rugi</option>
+             </select>
+          </div>
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Nominal Potongan (Rp)</label><input type="number" id="potNominal" required placeholder="Contoh: 50000" class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink font-bold text-brandPink"></div>
+          <div><label class="block mb-1 font-medium text-xs text-gray-500">Keterangan / Catatan</label><textarea id="potKeterangan" required rows="2" class="w-full border rounded-xl px-4 py-2 bg-gray-50 outline-none focus:border-brandPink" placeholder="Tulis rincian minus kasir..."></textarea></div>
+          <button type="submit" class="w-full btn-pink py-3 rounded-xl font-bold mt-4 shadow-lg text-sm"><i class="fa-solid fa-save mr-2"></i>Simpan Data</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Detail Shift Status -->
+  <div id="modal-shift-detail" class="fixed inset-0 bg-brandText/30 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-xs p-6 my-8">
+      <div class="flex justify-between items-center mb-6">
+        <div>
+           <h3 class="text-lg font-black text-brandText" id="msd-title">03 Agustus</h3>
+           <p class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Indikator Kuota Operasional</p>
+        </div>
+        <button onclick="closeModal('modal-shift-detail')" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-2xl"></i></button>
+      </div>
+      <div class="space-y-3" id="msd-content"></div>
+    </div>
+  </div>
+
+  <!-- Modal Riwayat Slip Gaji Karyawan -->
+  <div id="modal-emp-payroll" class="fixed inset-0 bg-brandText/40 backdrop-blur-sm z-[55] hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 h-[70vh] flex flex-col">
+      <div class="flex justify-between items-center mb-4 shrink-0">
+        <h3 class="text-lg font-bold text-brandText"><i class="fa-solid fa-file-invoice-dollar mr-2 text-brandPink"></i>Riwayat Gaji</h3>
+        <button onclick="closeModal('modal-emp-payroll')" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-2xl"></i></button>
+      </div>
+      <div class="flex-1 overflow-y-auto pr-2 space-y-3" id="empPayrollList"></div>
+    </div>
+  </div>
+
+  <!-- Modal Slip Gaji PDF Printable -->
+  <div id="modal-emp-slip" class="fixed inset-0 bg-brandText/80 backdrop-blur-md z-[60] hidden flex items-center justify-center p-4">
+    <div class="bg-[#feffff] w-full max-w-sm rounded-3xl border-t-8 border-brandPink shadow-2xl relative flex flex-col overflow-hidden">
+       <div id="slip-print-area" class="p-8 pb-6 bg-white relative">
+          <div class="text-center mb-6">
+             <div class="w-12 h-12 rounded-full bg-brandPink/10 mx-auto flex items-center justify-center text-brandPink mb-2 shadow-inner text-2xl"><i class="fa-solid fa-spa"></i></div>
+             <h2 class="text-lg font-black text-brandText tracking-widest uppercase">Ara Beauty</h2>
+             <p class="text-[10px] text-gray-500 uppercase tracking-widest mt-1 font-bold">Slip Gaji Elektronik Supabase</p>
+          </div>
+          
+          <div class="border-y-2 border-dashed border-gray-200 py-4 mb-4 space-y-2">
+             <div class="flex justify-between text-xs"><span class="text-gray-500 font-bold">Periode:</span> <span class="font-black text-brandText bg-gray-100 px-2 py-0.5 rounded" id="slip-periode">--/----</span></div>
+             <div class="flex justify-between text-xs"><span class="text-gray-500 font-bold">Nama:</span> <span class="font-black text-brandText" id="slip-nama">Karyawan</span></div>
+          </div>
+          
+          <div class="space-y-3 mb-6">
+             <div class="flex justify-between text-xs"><span class="text-gray-600 font-medium">Gaji Pokok</span> <span class="font-bold text-gray-800" id="slip-gapok">Rp 0</span></div>
+             <div class="flex justify-between text-xs"><span class="text-gray-600 font-medium">Tunj. Kehadiran</span> <span class="font-bold text-gray-800" id="slip-tunjangan">Rp 0</span></div>
+             <div class="flex justify-between text-xs"><span class="text-emerald-600 font-bold">Uang Lembur</span> <span class="font-bold text-emerald-600" id="slip-uang-lembur">+ Rp 0</span></div>
+             <div class="flex justify-between text-xs"><span class="text-gray-600 font-medium">Pot. Telat</span> <span class="font-bold text-rose-500" id="slip-pot-telat">- Rp 0</span></div>
+             <div class="flex justify-between text-xs"><span class="text-gray-600 font-medium">Pot. Alfa</span> <span class="font-bold text-rose-500" id="slip-pot-alfa">- Rp 0</span></div>
+             <div class="flex justify-between text-xs"><span class="text-gray-600 font-medium">Pot. Lain/Kasbon</span> <span class="font-bold text-rose-500" id="slip-pot-lain">- Rp 0</span></div>
+          </div>
+          
+          <div class="bg-brandPink/5 p-4 rounded-xl border border-brandPink/20 flex justify-between items-center shadow-inner">
+             <span class="text-[10px] font-black text-brandText uppercase tracking-widest">Total Diterima</span>
+             <span class="text-lg font-black text-brandPink" id="slip-total">Rp 0</span>
+          </div>
+          
+          <p class="text-[9px] text-center text-gray-400 mt-6 italic leading-relaxed">Slip gaji ini diterbitkan otomatis oleh sistem HRIS Ara Beauty (Supabase Enterprise).</p>
+       </div>
+       
+       <div class="p-4 bg-gray-50 border-t border-gray-100 flex justify-center gap-3" data-html2canvas-ignore="true">
+          <button onclick="closeModal('modal-emp-slip')" class="w-1/3 bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 py-3 rounded-xl text-sm font-bold shadow-sm transition-all">Tutup</button>
+          <button onclick="downloadSlipPDF()" class="w-2/3 bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white py-3 rounded-xl text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2">
+              <i class="fa-solid fa-file-pdf"></i> Download PDF
+          </button>
+       </div>
+    </div>
+  </div>
+
+  <!-- Modal Ganti PIN -->
+  <div id="modal-ganti-pin" class="fixed inset-0 bg-brandText/60 backdrop-blur-sm z-[70] hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-7">
+      <div class="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
+        <h3 class="text-lg font-black text-brandText"><i class="fa-solid fa-user-lock mr-2 text-brandPink"></i>Keamanan Akun</h3>
+        <button onclick="closeModal('modal-ganti-pin'); document.getElementById('formGantiPin').reset();" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <form id="formGantiPin" onsubmit="handleChangePIN(event)">
+        <div class="space-y-4">
+          <div>
+            <label class="block mb-1.5 font-bold text-gray-500 text-[10px] uppercase tracking-wider">PIN Saat Ini</label>
+            <input type="password" id="pinLama" required maxlength="6" pattern="[0-9]{6}" placeholder="••••••" class="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50 text-center text-xl font-black tracking-[0.5em] outline-none focus:border-brandPink transition-colors">
+          </div>
+          <div>
+            <label class="block mb-1.5 font-bold text-brandPink text-[10px] uppercase tracking-wider">PIN Baru (6 Digit Angka)</label>
+            <input type="password" id="pinBaru" required maxlength="6" pattern="[0-9]{6}" placeholder="••••••" class="w-full border-2 border-brandPink/30 rounded-2xl px-4 py-3 bg-brandPink/5 text-center text-xl font-black tracking-[0.5em] outline-none focus:border-brandPink transition-colors">
+          </div>
+          <div>
+            <label class="block mb-1.5 font-bold text-gray-500 text-[10px] uppercase tracking-wider">Ulangi PIN Baru</label>
+            <input type="password" id="pinKonfirmasi" required maxlength="6" pattern="[0-9]{6}" placeholder="••••••" class="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50 text-center text-xl font-black tracking-[0.5em] outline-none focus:border-brandPink transition-colors">
+          </div>
+          <div class="pt-4">
+            <button type="submit" class="w-full btn-pink py-3.5 rounded-2xl font-black shadow-lg shadow-brandPink/30 flex justify-center items-center gap-2 text-sm">
+              <i class="fa-solid fa-shield-halved"></i> Simpan PIN Baru
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Notifikasi -->
+  <div id="modal-emp-notif" class="fixed inset-0 bg-brandText/40 backdrop-blur-sm z-[70] hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 h-[60vh] flex flex-col">
+      <div class="flex justify-between items-center mb-4 shrink-0 border-b border-gray-50 pb-4">
+        <h3 class="text-lg font-black text-brandText"><i class="fa-solid fa-bell mr-2 text-brandPink"></i>Notifikasi</h3>
+        <button onclick="closeModal('modal-emp-notif')" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark text-2xl"></i></button>
+      </div>
+      <div class="flex-1 overflow-y-auto pr-2 space-y-3" id="notifList"></div>
+    </div>
+  </div>
+
+  <!-- Modal Detail Bukti Foto Absen & Maps -->
+  <div id="modal-emp-att-detail" class="fixed inset-0 bg-brandText/60 backdrop-blur-md z-[75] hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden relative">
+      <div class="relative h-64 bg-gray-100 flex items-center justify-center overflow-hidden">
+        <img id="attDetailPhoto" src="" class="w-full h-full object-cover" alt="Bukti Foto Absensi" onerror="this.onerror=null; this.src='https://placehold.co/400x300/e2e8f0/64748b?text=Tanpa+Foto';">
+        <div class="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/20"></div>
+        <button onclick="closeModal('modal-emp-att-detail')" class="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/20 backdrop-blur-md text-white flex items-center justify-center hover:bg-white/40 transition-colors">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+        <div class="absolute bottom-4 left-4 right-4 text-white">
+          <span id="attDetailStatusBadge" class="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-500/80 backdrop-blur-sm">Hadir</span>
+          <h4 id="attDetailDate" class="text-base font-black mt-1">--/--/----</h4>
+        </div>
+      </div>
+      <div class="p-5 space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-gray-50 p-3 rounded-2xl border border-gray-100">
+            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Jam Masuk</p>
+            <p class="text-sm font-black text-emerald-600" id="attDetailIn">--:--</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-2xl border border-gray-100">
+            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Jam Pulang</p>
+            <p class="text-sm font-black text-rose-500" id="attDetailOut">--:--</p>
+          </div>
+        </div>
+        <a id="attDetailMapsBtn" href="#" target="_blank" class="w-full bg-gray-100 hover:bg-gray-200 text-brandText py-3 rounded-2xl font-bold transition-colors flex items-center justify-center gap-2 text-xs shadow-sm">
+          <i class="fa-solid fa-map-location-dot text-brandPink text-sm"></i> Buka Lokasi GPS Absensi
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

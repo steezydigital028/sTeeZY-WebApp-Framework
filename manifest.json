@@ -1,22 +1,21 @@
 {
   "name": "Ara Beauty HRIS",
   "short_name": "Ara HRIS",
-  "description": "Sistem Presensi, Jadwal, & HRIS Eksekutif Ara Beauty Sukawati",
+  "description": "Ara Beauty Sukawati - HRIS & Executive Mobile Dashboard",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#ff8fa3",
+  "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/icons/icon-192x192.png",
+      "src": "https://placehold.co/192x192/ff8fa3/ffffff?text=Ara+Beauty",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icons/icon-512x512.png",
+      "src": "https://placehold.co/512x512/ff8fa3/ffffff?text=Ara+Beauty",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
